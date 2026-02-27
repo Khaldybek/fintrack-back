@@ -1,0 +1,17 @@
+import { IsInt, IsOptional, IsUUID, IsString, MaxLength, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class CreateBudgetDto {
+  @IsUUID()
+  categoryId: string;
+
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  limitMinor: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  currency?: string;
+}
