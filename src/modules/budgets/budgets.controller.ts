@@ -13,17 +13,17 @@ export class BudgetsController {
 
   @Get()
   findAll(@CurrentUser() user: User) {
-    return this.budgetsService.findAllByUser(user.id, user.timezone);
+    return this.budgetsService.findAllByUser(user.id, user.timezone ?? 'UTC');
   }
 
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: User) {
-    return this.budgetsService.findOne(id, user.id, user.timezone);
+    return this.budgetsService.findOne(id, user.id, user.timezone ?? 'UTC');
   }
 
   @Post()
   create(@Body() dto: CreateBudgetDto, @CurrentUser() user: User) {
-    return this.budgetsService.create(user.id, dto, user.timezone);
+    return this.budgetsService.create(user.id, dto, user.timezone ?? 'UTC');
   }
 
   @Patch(':id')
@@ -32,7 +32,7 @@ export class BudgetsController {
     @Body() dto: UpdateBudgetDto,
     @CurrentUser() user: User,
   ) {
-    return this.budgetsService.update(id, user.id, dto, user.timezone);
+    return this.budgetsService.update(id, user.id, dto, user.timezone ?? 'UTC');
   }
 
   @Delete(':id')

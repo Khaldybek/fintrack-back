@@ -11,7 +11,10 @@ export class AnalyticsController {
 
   @Get('monthly')
   monthly(@CurrentUser() user: User, @Query('year') year?: string) {
-    return this.analytics.monthly(user, year ? parseInt(year, 10) : undefined);
+    const y = year ? parseInt(year, 10) : undefined;
+    const validYear =
+      y !== undefined && Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : undefined;
+    return this.analytics.monthly(user, validYear);
   }
 
   @Get('categories')
@@ -21,7 +24,8 @@ export class AnalyticsController {
 
   @Get('trends')
   trends(@CurrentUser() user: User, @Query('months') months?: string) {
-    return this.analytics.trends(user, months ? parseInt(months, 10) : 6);
+    const m = months ? parseInt(months, 10) : 6;
+    return this.analytics.trends(user, Number.isInteger(m) && m >= 1 && m <= 60 ? m : 6);
   }
 
   @Get('heatmap')

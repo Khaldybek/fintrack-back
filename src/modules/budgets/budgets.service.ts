@@ -69,6 +69,7 @@ export class BudgetsService {
       .andWhere('t.date >= :dateFrom', { dateFrom })
       .andWhere('t.date <= :dateTo', { dateTo })
       .andWhere('t.amount_minor < 0')
+      .andWhere('t.deleted_at IS NULL')
       .getRawOne<{ sum: string }>();
     return parseInt(r?.sum ?? '0', 10);
   }

@@ -27,12 +27,13 @@ export class AnalyticsService {
     if (ids.length === 0) return { year: y, months: [] };
     const rows = await this.txRepo
       .createQueryBuilder('t')
-      .select('SUBSTRING(t.date FROM 1 FOR 7)', 'month')
+      .select('SUBSTRING(t.date::text FROM 1 FOR 7)', 'month')
       .addSelect('SUM(CASE WHEN t.amount_minor > 0 THEN t.amount_minor ELSE 0 END)', 'income')
       .addSelect('SUM(CASE WHEN t.amount_minor < 0 THEN ABS(t.amount_minor) ELSE 0 END)', 'expense')
       .where('t.account_id IN (:...ids)', { ids })
-      .andWhere('SUBSTRING(t.date FROM 1 FOR 4) = :y', { y: String(y) })
-      .groupBy('SUBSTRING(t.date FROM 1 FOR 7)')
+      .andWhere('SUBSTRING(t.date::text FROM 1 FOR 4) = :y', { y: String(y) })
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('SUBSTRING(t.date::text FROM 1 FOR 7)')
       .orderBy('month')
       .getRawMany();
     const currency = 'KZT';
@@ -40,8 +41,8 @@ export class AnalyticsService {
       year: y,
       months: rows.map((r) => ({
         month: r.month,
-        income: toMoneyDto(parseInt(r.income ?? '0', 10), currency),
-        expense: toMoneyDto(parseInt(r.expense ?? '0', 10), currency),
+        income: toMoneyDto(Number(r.income) || 0, currency),
+        expense: toMoneyDto(Number(r.expense) || 0, currency),
       })),
     };
   }
@@ -49,7 +50,7 @@ export class AnalyticsService {
   async categories(user: User, dateFrom?: string, dateTo?: string) {
     const ids = await this.accountIds(user.id);
     if (ids.length === 0) return { items: [], total_expense_minor: 0 };
-    const range = dateFrom && dateTo ? { dateFrom, dateTo } : getCurrentMonthRange(user.timezone);
+    const range = dateFrom && dateTo ? { dateFrom, dateTo } : getCurrentMonthRange(user.timezone ?? 'UTC');
     const rows = await this.txRepo
       .createQueryBuilder('t')
       .innerJoin('categories', 'c', 'c.id = t.category_id')
@@ -81,28 +82,35 @@ export class AnalyticsService {
   }
 
   async trends(user: User, months: number = 6) {
+    const safeMonths = Number.isInteger(months) && months >= 1 && months <= 60 ? months : 6;
     const end = new Date();
     const start = new Date();
-    start.setMonth(start.getMonth() - months);
+    start.setMonth(start.getMonth() - safeMonths);
     const ids = await this.accountIds(user.id);
     if (ids.length === 0) return { items: [] };
+    const fromStr = start.toISOString().slice(0, 10);
+    const toStr = end.toISOString().slice(0, 10);
     const rows = await this.txRepo
       .createQueryBuilder('t')
-      .select('SUBSTRING(t.date FROM 1 FOR 7)', 'month')
+      .select('SUBSTRING(t.date::text FROM 1 FOR 7)', 'month')
       .addSelect('SUM(t.amount_minor)', 'net')
       .where('t.account_id IN (:...ids)', { ids })
-      .andWhere('t.date >= :from', { from: start.toISOString().slice(0, 10) })
-      .andWhere('t.date <= :to', { to: end.toISOString().slice(0, 10) })
-      .groupBy('SUBSTRING(t.date FROM 1 FOR 7)')
+      .andWhere('t.date >= :from', { from: fromStr })
+      .andWhere('t.date <= :to', { to: toStr })
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('SUBSTRING(t.date::text FROM 1 FOR 7)')
       .orderBy('month')
       .getRawMany();
     const currency = 'KZT';
     return {
-      items: rows.map((r) => ({
-        month: r.month,
-        net: toMoneyDto(parseInt(r.net ?? '0', 10), currency),
-        net_minor: parseInt(r.net ?? '0', 10),
-      })),
+      items: rows.map((r) => {
+        const net = Number(r.net) || 0;
+        return {
+          month: r.month,
+          net: toMoneyDto(net, currency),
+          net_minor: net,
+        };
+      }),
     };
   }
 
