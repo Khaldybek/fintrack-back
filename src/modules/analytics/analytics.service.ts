@@ -114,12 +114,215 @@ export class AnalyticsService {
     };
   }
 
-  async heatmap(_user: User) {
-    return { days: [], explanation: 'Heatmap data.' };
+  async heatmap(user: User, days: number = 90) {
+    const safeDays = Number.isInteger(days) && days >= 7 && days <= 365 ? days : 90;
+    const ids = await this.accountIds(user.id);
+    if (ids.length === 0) return { days: [] };
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - safeDays);
+    const rows = await this.txRepo
+      .createQueryBuilder('t')
+      .select('t.date::text', 'day')
+      .addSelect('SUM(ABS(t.amount_minor))', 'total')
+      .where('t.account_id IN (:...ids)', { ids })
+      .andWhere('t.date >= :from', { from: start.toISOString().slice(0, 10) })
+      .andWhere('t.date <= :to', { to: end.toISOString().slice(0, 10) })
+      .andWhere('t.amount_minor < 0')
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('t.date::text')
+      .orderBy('day')
+      .getRawMany();
+    const currency = 'KZT';
+    const items = rows.map((r) => ({
+      day: r.day,
+      total: toMoneyDto(Number(r.total) || 0, currency),
+      total_minor: Number(r.total) || 0,
+    }));
+    const max = items.reduce((m, r) => Math.max(m, r.total_minor), 0);
+    return {
+      days: items.map((r) => ({
+        ...r,
+        intensity: max > 0 ? Math.round((r.total_minor / max) * 100) : 0,
+      })),
+    };
   }
 
-  async anomalies(_user: User) {
-    return { items: [], status: 'stable' };
+  async anomalies(user: User) {
+    const ids = await this.accountIds(user.id);
+    if (ids.length === 0) return { items: [], status: 'stable' };
+    const rows = await this.txRepo
+      .createQueryBuilder('t')
+      .select('SUBSTRING(t.date::text FROM 1 FOR 7)', 'month')
+      .addSelect('SUM(ABS(t.amount_minor))', 'expense')
+      .where('t.account_id IN (:...ids)', { ids })
+      .andWhere('t.amount_minor < 0')
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('SUBSTRING(t.date::text FROM 1 FOR 7)')
+      .orderBy('month')
+      .getRawMany();
+    if (rows.length < 2) return { items: [], status: 'stable' };
+    const values = rows.map((r) => Number(r.expense) || 0);
+    const avg = values.reduce((s, v) => s + v, 0) / values.length;
+    const stddev = Math.sqrt(values.reduce((s, v) => s + Math.pow(v - avg, 2), 0) / values.length);
+    const threshold = avg + 1.5 * stddev;
+    const currency = 'KZT';
+    const anomalous = rows
+      .filter((r) => (Number(r.expense) || 0) > threshold)
+      .map((r) => ({
+        month: r.month,
+        expense: toMoneyDto(Number(r.expense) || 0, currency),
+        expense_minor: Number(r.expense) || 0,
+        avg_expense: toMoneyDto(Math.round(avg), currency),
+        deviation_pct: Math.round(((Number(r.expense) - avg) / avg) * 100),
+      }));
+    return {
+      items: anomalous,
+      status: anomalous.length > 0 ? 'anomaly_detected' : 'stable',
+    };
+  }
+
+  async topCategories(user: User, dateFrom?: string, dateTo?: string, limit: number = 5) {
+    const ids = await this.accountIds(user.id);
+    if (ids.length === 0) return { items: [] };
+    const range = dateFrom && dateTo ? { dateFrom, dateTo } : getCurrentMonthRange(user.timezone ?? 'UTC');
+    const safeLimit = Number.isInteger(limit) && limit >= 1 && limit <= 20 ? limit : 5;
+    const rows = await this.txRepo
+      .createQueryBuilder('t')
+      .innerJoin('categories', 'c', 'c.id = t.category_id')
+      .select('t.category_id', 'categoryId')
+      .addSelect('c.name', 'name')
+      .addSelect('c.icon', 'icon')
+      .addSelect('c.color', 'color')
+      .addSelect('SUM(ABS(t.amount_minor))', 'expense')
+      .addSelect('COUNT(t.id)', 'tx_count')
+      .where('t.account_id IN (:...ids)', { ids })
+      .andWhere('t.date >= :dateFrom', { dateFrom: range.dateFrom })
+      .andWhere('t.date <= :dateTo', { dateTo: range.dateTo })
+      .andWhere('t.amount_minor < 0')
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('t.category_id')
+      .addGroupBy('c.name')
+      .addGroupBy('c.icon')
+      .addGroupBy('c.color')
+      .orderBy('expense', 'DESC')
+      .limit(safeLimit)
+      .getRawMany();
+    const currency = 'KZT';
+    const total = rows.reduce((s, r) => s + (Number(r.expense) || 0), 0);
+    return {
+      date_from: range.dateFrom,
+      date_to: range.dateTo,
+      items: rows.map((r, i) => ({
+        rank: i + 1,
+        categoryId: r.categoryId,
+        name: r.name,
+        icon: r.icon ?? null,
+        color: r.color ?? null,
+        expense: toMoneyDto(Number(r.expense) || 0, currency),
+        expense_minor: Number(r.expense) || 0,
+        tx_count: Number(r.tx_count) || 0,
+        share_pct: total > 0 ? Math.round(((Number(r.expense) || 0) / total) * 100) : 0,
+      })),
+      total_expense: toMoneyDto(total, currency),
+      total_expense_minor: total,
+    };
+  }
+
+  async savingsRate(user: User, months: number = 6) {
+    const safeMonths = Number.isInteger(months) && months >= 1 && months <= 24 ? months : 6;
+    const ids = await this.accountIds(user.id);
+    if (ids.length === 0) return { items: [] };
+    const end = new Date();
+    const start = new Date();
+    start.setMonth(start.getMonth() - safeMonths);
+    const rows = await this.txRepo
+      .createQueryBuilder('t')
+      .select('SUBSTRING(t.date::text FROM 1 FOR 7)', 'month')
+      .addSelect('SUM(CASE WHEN t.amount_minor > 0 THEN t.amount_minor ELSE 0 END)', 'income')
+      .addSelect('SUM(CASE WHEN t.amount_minor < 0 THEN ABS(t.amount_minor) ELSE 0 END)', 'expense')
+      .where('t.account_id IN (:...ids)', { ids })
+      .andWhere('t.date >= :from', { from: start.toISOString().slice(0, 10) })
+      .andWhere('t.date <= :to', { to: end.toISOString().slice(0, 10) })
+      .andWhere('t.deleted_at IS NULL')
+      .groupBy('SUBSTRING(t.date::text FROM 1 FOR 7)')
+      .orderBy('month')
+      .getRawMany();
+    const currency = 'KZT';
+    return {
+      items: rows.map((r) => {
+        const income = Number(r.income) || 0;
+        const expense = Number(r.expense) || 0;
+        const saved = income - expense;
+        const rate = income > 0 ? Math.round((saved / income) * 100) : 0;
+        return {
+          month: r.month,
+          income: toMoneyDto(income, currency),
+          expense: toMoneyDto(expense, currency),
+          saved: toMoneyDto(saved, currency),
+          saved_minor: saved,
+          savings_rate_pct: rate,
+          status: rate >= 20 ? 'good' : rate >= 0 ? 'attention' : 'risk',
+        };
+      }),
+    };
+  }
+
+  async compare(
+    user: User,
+    periodA: { dateFrom: string; dateTo: string },
+    periodB: { dateFrom: string; dateTo: string },
+  ) {
+    const ids = await this.accountIds(user.id);
+    if (ids.length === 0) {
+      return { period_a: null, period_b: null, diff: null };
+    }
+    const currency = 'KZT';
+    const query = async (from: string, to: string) => {
+      const rows = await this.txRepo
+        .createQueryBuilder('t')
+        .select('SUM(CASE WHEN t.amount_minor > 0 THEN t.amount_minor ELSE 0 END)', 'income')
+        .addSelect('SUM(CASE WHEN t.amount_minor < 0 THEN ABS(t.amount_minor) ELSE 0 END)', 'expense')
+        .addSelect('COUNT(t.id)', 'tx_count')
+        .where('t.account_id IN (:...ids)', { ids })
+        .andWhere('t.date >= :from', { from })
+        .andWhere('t.date <= :to', { to })
+        .andWhere('t.deleted_at IS NULL')
+        .getRawOne<{ income: string; expense: string; tx_count: string }>();
+      const income = Number(rows?.income) || 0;
+      const expense = Number(rows?.expense) || 0;
+      return { income, expense, net: income - expense, tx_count: Number(rows?.tx_count) || 0 };
+    };
+    const [a, b] = await Promise.all([
+      query(periodA.dateFrom, periodA.dateTo),
+      query(periodB.dateFrom, periodB.dateTo),
+    ]);
+    const diffExpense = b.expense - a.expense;
+    const diffIncome = b.income - a.income;
+    return {
+      period_a: {
+        date_from: periodA.dateFrom,
+        date_to: periodA.dateTo,
+        income: toMoneyDto(a.income, currency),
+        expense: toMoneyDto(a.expense, currency),
+        net: toMoneyDto(a.net, currency),
+        tx_count: a.tx_count,
+      },
+      period_b: {
+        date_from: periodB.dateFrom,
+        date_to: periodB.dateTo,
+        income: toMoneyDto(b.income, currency),
+        expense: toMoneyDto(b.expense, currency),
+        net: toMoneyDto(b.net, currency),
+        tx_count: b.tx_count,
+      },
+      diff: {
+        income_change: toMoneyDto(diffIncome, currency),
+        income_change_pct: a.income > 0 ? Math.round((diffIncome / a.income) * 100) : null,
+        expense_change: toMoneyDto(diffExpense, currency),
+        expense_change_pct: a.expense > 0 ? Math.round((diffExpense / a.expense) * 100) : null,
+      },
+    };
   }
 
   /** Экспорт месячного отчёта (stub: возвращает url заглушку) */
