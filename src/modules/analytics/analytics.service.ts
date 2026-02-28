@@ -325,14 +325,4 @@ export class AnalyticsService {
     };
   }
 
-  /** Экспорт месячного отчёта (stub: возвращает url заглушку) */
-  async monthlyReportExport(
-    _user: User,
-    year?: number,
-    month?: number,
-  ): Promise<{ url: string }> {
-    const y = year ?? new Date().getFullYear();
-    const m = month ?? new Date().getMonth() + 1;
-    return { url: `/exports/monthly-report-${y}-${String(m).padStart(2, '0')}.pdf` };
-  }
 }

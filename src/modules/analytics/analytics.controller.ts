@@ -1,13 +1,18 @@
-import { BadRequestException, Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 import { AnalyticsService } from './analytics.service';
+import { PdfReportService } from './pdf-report.service';
 
 @Controller('analytics')
 @UseGuards(JwtAuthGuard)
 export class AnalyticsController {
-  constructor(private readonly analytics: AnalyticsService) {}
+  constructor(
+    private readonly analytics: AnalyticsService,
+    private readonly pdfReport: PdfReportService,
+  ) {}
 
   @Get('monthly')
   monthly(@CurrentUser() user: User, @Query('year') year?: string) {
@@ -79,10 +84,23 @@ export class AnalyticsController {
   }
 
   @Post('monthly-report/export')
-  monthlyReportExport(
+  async monthlyReportExport(
     @CurrentUser() user: User,
-    @Body() body: { year: number; month: number },
+    @Body() body: { year?: number; month?: number },
+    @Res() res: Response,
   ) {
-    return this.analytics.monthlyReportExport(user, body?.year, body?.month);
+    const now = new Date();
+    const year = Number.isInteger(body?.year) ? body.year! : now.getFullYear();
+    const month = Number.isInteger(body?.month) && body.month! >= 1 && body.month! <= 12
+      ? body.month!
+      : now.getMonth() + 1;
+    const pdf = await this.pdfReport.generateMonthlyReport(user, year, month);
+    const filename = `monthly-report-${year}-${String(month).padStart(2, '0')}.pdf`;
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': pdf.length,
+    });
+    res.end(pdf);
   }
 }
