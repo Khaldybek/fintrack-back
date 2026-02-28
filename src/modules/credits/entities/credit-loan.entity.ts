@@ -41,7 +41,7 @@ export class CreditLoan {
   @Column({ name: 'payment_day_of_month', type: 'smallint', nullable: true })
   paymentDayOfMonth: number | null;
 
-  @Column({ type: 'varchar', length: 2, default: 'KZT' })
+  @Column({ type: 'varchar', length: 3, default: 'KZT' })
   currency: string;
 
   @CreateDateColumn({ name: 'created_at' })

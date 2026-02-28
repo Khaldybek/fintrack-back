@@ -7,7 +7,7 @@ import { UpdateAccountDto } from './dto/update-account.dto';
 import { toMoneyDto } from '../../common/money.util';
 import { FeatureGatedException } from '../../common/errors/feature-gated.exception';
 
-const FREE_ACCOUNT_LIMIT = 3;
+const FREE_ACCOUNT_LIMIT = 2;
 
 @Injectable()
 export class AccountsService {
