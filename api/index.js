@@ -37,20 +37,37 @@ async function getApp() {
 /**
  * Vercel serverless handler: forwards (req, res) to the Nest/Express app.
  */
+function getPathForNest(req) {
+  const rawUrl = req.url || '';
+  // 1) path from query (rewrite destination: /api?path=/$1)
+  const q = rawUrl.indexOf('?');
+  const query = q >= 0 ? rawUrl.slice(q + 1) : '';
+  const pathParam = query.split('&').find((p) => p.startsWith('path='));
+  if (pathParam) {
+    const eq = pathParam.indexOf('=');
+    const value = eq >= 0 ? pathParam.slice(eq + 1) : '';
+    try {
+      const decoded = decodeURIComponent(value).replace(/^\/+/, '/') || '/';
+      const rest = query.split('&').filter((p) => !p.startsWith('path=')).join('&');
+      return rest ? decoded + (decoded.includes('?') ? '&' : '?') + rest : decoded;
+    } catch (_) {}
+  }
+  // 2) path from header (some Vercel setups)
+  const forwarded = req.headers['x-vercel-forwarded-url'] || req.headers['x-forwarded-url'];
+  if (forwarded) {
+    try {
+      const u = new URL(forwarded.startsWith('http') ? forwarded : 'https://x.com' + (forwarded.startsWith('/') ? forwarded : '/' + forwarded));
+      return u.pathname + (u.search || '') || '/';
+    } catch (_) {}
+  }
+  // 3) fallback: strip /api
+  if (rawUrl.startsWith('/api')) return rawUrl.replace(/^\/api/, '') || '/';
+  return rawUrl || '/';
+}
+
 module.exports = async (req, res) => {
   try {
-    // Rewrite sends path in ?path=/$1 so Vercel always hits /api (this file). Restore path for Nest.
-    const rawUrl = req.url || '';
-    const q = rawUrl.indexOf('?');
-    const query = q >= 0 ? rawUrl.slice(q + 1) : '';
-    const pathParam = query.split('&').find((p) => p.startsWith('path='));
-    if (pathParam) {
-      const decoded = decodeURIComponent(pathParam.slice(5)).replace(/^\/+/, '/') || '/';
-      const rest = query.split('&').filter((p) => !p.startsWith('path=')).join('&');
-      req.url = rest ? decoded + (decoded.includes('?') ? '&' : '?') + rest : decoded;
-    } else if (rawUrl.startsWith('/api')) {
-      req.url = rawUrl.replace(/^\/api/, '') || '/';
-    }
+    req.url = getPathForNest(req);
     const app = await getApp();
     const expressApp = app.getHttpAdapter().getInstance();
     expressApp(req, res);
