@@ -39,6 +39,8 @@ async function getApp() {
  */
 function getPathForNest(req) {
   const rawUrl = req.url || '';
+  // 0) Already correct path (e.g. when Vercel invokes main.js with original URL)
+  if (rawUrl.startsWith('/v1') || rawUrl === '/') return rawUrl;
   // 1) path from query (rewrite destination: /api?path=/$1)
   const q = rawUrl.indexOf('?');
   const query = q >= 0 ? rawUrl.slice(q + 1) : '';

@@ -12,6 +12,8 @@ async function getApp(): Promise<INestApplication> {
 
 function getPathForNest(req: any): string {
   const rawUrl = (req.url as string) || '';
+  // Already correct path when Vercel invokes this handler with original URL
+  if (rawUrl.startsWith('/v1') || rawUrl === '/') return rawUrl;
   const q = rawUrl.indexOf('?');
   const query = q >= 0 ? rawUrl.slice(q + 1) : '';
   const pathParam = query.split('&').find((p: string) => p.startsWith('path='));
