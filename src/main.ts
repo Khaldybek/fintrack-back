@@ -12,9 +12,17 @@ async function getApp(): Promise<INestApplication> {
 
 /** Vercel serverless entry: export so "No exports found" is resolved when Framework Preset uses main.js */
 export default async function handler(req: any, res: any): Promise<void> {
-  // Rewrite sends path as /api/$1 — strip /api so Nest sees /v1/...
-  if (req.url && typeof req.url === 'string' && req.url.startsWith('/api')) {
-    req.url = req.url.replace(/^\/api/, '') || '/';
+  // Rewrite sends path in ?path=/$1 so Vercel always hits /api. Restore path for Nest.
+  const rawUrl = (req.url as string) || '';
+  const q = rawUrl.indexOf('?');
+  const query = q >= 0 ? rawUrl.slice(q + 1) : '';
+  const pathParam = query.split('&').find((p: string) => p.startsWith('path='));
+  if (pathParam) {
+    const decoded = decodeURIComponent(pathParam.slice(5)).replace(/^\/+/, '/') || '/';
+    const rest = query.split('&').filter((p: string) => !p.startsWith('path=')).join('&');
+    req.url = rest ? decoded + (decoded.includes('?') ? '&' : '?') + rest : decoded;
+  } else if (rawUrl.startsWith('/api')) {
+    req.url = rawUrl.replace(/^\/api/, '') || '/';
   }
   const app = await getApp();
   const expressApp = app.getHttpAdapter().getInstance();
