@@ -1,6 +1,8 @@
-import { IsEmail } from 'class-validator';
+import { IsEmail, MaxLength, MinLength } from 'class-validator';
 
 export class ForgotPasswordDto {
-  @IsEmail()
+  @IsEmail({}, { message: 'Укажите корректный email' })
+  @MinLength(5)
+  @MaxLength(255)
   email: string;
 }

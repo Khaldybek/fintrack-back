@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createHash, randomBytes } from 'crypto';
 import { Response } from 'express';
+import * as nodemailer from 'nodemailer';
 import { User } from '../users/entities/user.entity';
 import { RefreshToken } from '../users/entities/refresh-token.entity';
 import { PasswordResetToken } from '../users/entities/password-reset-token.entity';
@@ -27,8 +28,13 @@ export interface AuthResult extends TokenPair {
   refreshExpiresAt: Date;
 }
 
+/** Rate limit: max requests per email per window (forgot-password). */
+const FORGOT_PASSWORD_RATE_LIMIT = { maxRequests: 3, windowMs: 15 * 60 * 1000 };
+
 @Injectable()
 export class AuthService {
+  private readonly forgotPasswordAttempts = new Map<string, { count: number; firstAt: number }>();
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -180,39 +186,135 @@ export class AuthService {
     }
   }
 
-  /** Forgot password: create reset token and optionally send email. Always returns success (no user enumeration). */
+  /**
+   * Forgot password: create reset token and send email.
+   * - Only for users with password (not Google-only). Always returns 200 (no user enumeration).
+   * - Old reset tokens for this user are invalidated (only latest link works).
+   * - Rate limit: max 3 requests per email per 15 min; excess requests get 200 but no email.
+   */
   async forgotPassword(email: string): Promise<void> {
-    const user = await this.usersService.findByEmail(email);
-    if (!user || !user.passwordHash) return;
+    const normalizedEmail = email.trim().toLowerCase();
+    const now = Date.now();
+    const key = `forgot:${normalizedEmail}`;
+    let state = this.forgotPasswordAttempts.get(key);
+    if (state) {
+      if (now - state.firstAt > FORGOT_PASSWORD_RATE_LIMIT.windowMs) {
+        state = { count: 0, firstAt: now };
+        this.forgotPasswordAttempts.set(key, state);
+      }
+      state.count += 1;
+      if (state.count > FORGOT_PASSWORD_RATE_LIMIT.maxRequests) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(`[AuthService] forgot-password: rate limit exceeded for ${normalizedEmail}`);
+        }
+        return;
+      }
+    } else {
+      state = { count: 1, firstAt: now };
+      this.forgotPasswordAttempts.set(key, state);
+    }
+
+    const user = await this.usersService.findByEmail(normalizedEmail);
+    if (!user) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[AuthService] forgot-password: user not found for ${normalizedEmail}`);
+      }
+      return;
+    }
+
+    await this.passwordResetTokenRepo.delete({ userId: user.id });
+
     const token = randomBytes(32).toString('hex');
     const tokenHash = this.hashToken(token);
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const expiresAt = new Date(now + 60 * 60 * 1000);
     await this.passwordResetTokenRepo.insert({
       userId: user.id,
       tokenHash,
       expiresAt,
     });
-    const frontendUrl = this.config.get<string>('auth.frontendUrl');
-    if (frontendUrl && process.env.NODE_ENV !== 'production') {
-      // eslint-disable-next-line no-console
-      console.log(`[dev] Password reset link for ${email}: ${frontendUrl}/reset-password?token=${token}`);
+
+    const frontendUrl = this.config.get<string>('auth.frontendUrl') ?? '';
+    const resetLink = frontendUrl ? `${frontendUrl.replace(/\/$/, '')}/reset-password?token=${token}` : '';
+
+    const smtp = this.config.get<{ host: string; port: number; secure: boolean; user: string; pass: string; from: string }>('auth.smtp');
+    const smtpConfigured = smtp?.host && smtp?.user && smtp?.pass;
+
+    if (smtpConfigured && resetLink) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: smtp.host,
+          port: smtp.port,
+          secure: smtp.secure,
+          auth: { user: smtp.user, pass: smtp.pass },
+        });
+        const isFirstPassword = !user.passwordHash;
+        const subject = isFirstPassword ? 'Задать пароль — FinTrack' : 'Сброс пароля — FinTrack';
+        const textIntro = isFirstPassword
+          ? 'Вы запросили установку пароля для входа по email. Перейдите по ссылке (действует 1 час):'
+          : 'Вы запросили сброс пароля. Перейдите по ссылке (действует 1 час):';
+        await transporter.sendMail({
+          from: smtp.from,
+          to: user.email,
+          subject,
+          text: `Здравствуйте.\n\n${textIntro}\n${resetLink}\n\nЕсли вы не запрашивали это, проигнорируйте письмо.`,
+          html: `<p>Здравствуйте.</p><p>${textIntro}</p><p><a href="${resetLink}">${isFirstPassword ? 'Задать пароль' : 'Сбросить пароль'}</a></p><p>Если вы не запрашивали это, проигнорируйте письмо.</p>`,
+        });
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`[AuthService] forgot-password: email sent to ${user.email}`);
+        }
+      } catch (err) {
+        console.error('[AuthService] Failed to send reset email:', err instanceof Error ? err.message : err);
+      }
+    } else {
+      if (process.env.NODE_ENV !== 'production') {
+        if (!smtpConfigured) console.warn('[AuthService] forgot-password: SMTP not configured, cannot send email');
+        if (!resetLink) console.warn('[AuthService] forgot-password: FRONTEND_URL empty, no reset link');
+        if (frontendUrl) console.log(`[dev] Password reset link for ${user.email}: ${resetLink}`);
+      }
     }
-    // TODO: in production send email with link (e.g. ${frontendUrl}/reset-password?token=...)
   }
 
-  /** Reset password using token from email link. */
+  /**
+   * Reset password using token from email link.
+   * Token is single-use: deleted after successful reset.
+   */
   async resetPassword(token: string, newPassword: string): Promise<void> {
-    const tokenHash = this.hashToken(token);
+    const trimmed = token?.trim();
+    if (!trimmed) throw new UnauthorizedException('Токен сброса не указан');
+    const tokenHash = this.hashToken(trimmed);
     const record = await this.passwordResetTokenRepo.findOne({
       where: { tokenHash },
       relations: ['user'],
     });
-    if (!record) throw new UnauthorizedException('Invalid or expired reset link');
+    if (!record) throw new UnauthorizedException('Ссылка недействительна или уже использована');
     if (record.expiresAt < new Date()) {
       await this.passwordResetTokenRepo.delete(record.id);
-      throw new UnauthorizedException('Reset link has expired');
+      throw new UnauthorizedException('Срок действия ссылки истёк. Запросите сброс пароля снова.');
     }
     await this.usersService.setPassword(record.user.id, newPassword);
     await this.passwordResetTokenRepo.delete(record.id);
+  }
+
+  /**
+   * Send a test email (for development). Uses same SMTP config as forgot-password.
+   */
+  async sendTestEmail(to: string): Promise<void> {
+    const smtp = this.config.get<{ host: string; port: number; secure: boolean; user: string; pass: string; from: string }>('auth.smtp');
+    if (!smtp?.host || !smtp?.user || !smtp?.pass) {
+      throw new BadRequestException('SMTP не настроен. Проверьте SMTP_HOST, SMTP_USER, SMTP_PASS в .env');
+    }
+    const transporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port,
+      secure: smtp.secure,
+      auth: { user: smtp.user, pass: smtp.pass },
+    });
+    await transporter.sendMail({
+      from: smtp.from,
+      to,
+      subject: 'Тестовое письмо — FinTrack SMTP',
+      text: `Это тестовое письмо. Если вы его получили, SMTP настроен верно.\n\nFinTrack Backend`,
+      html: `<p>Это тестовое письмо. Если вы его получили, SMTP настроен верно.</p><p><strong>FinTrack Backend</strong></p>`,
+    });
   }
 }

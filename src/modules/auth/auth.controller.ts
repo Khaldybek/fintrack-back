@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  NotFoundException,
   Post,
   Req,
   Res,
@@ -129,13 +131,25 @@ export class AuthController {
 
   @Post('forgot-password')
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
-    await this.authService.forgotPassword(dto.email);
+    await this.authService.forgotPassword(dto.email.trim().toLowerCase());
     return { success: true };
   }
 
   @Post('reset-password')
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.token, dto.newPassword);
-    return { success: true };
+    return { success: true, message: 'Пароль успешно изменён. Войдите с новым паролем.' };
+  }
+
+  /** Только для разработки: отправить тестовое письмо на указанный email (проверка SMTP). */
+  @Post('send-test-email')
+  async sendTestEmail(@Body() body: { to?: string }) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new NotFoundException();
+    }
+    const to = (body?.to ?? 'etkuyrdaq@gmail.com').trim();
+    if (!to || !to.includes('@')) throw new BadRequestException('Укажите корректный email в поле to');
+    await this.authService.sendTestEmail(to);
+    return { success: true, message: `Тестовое письмо отправлено на ${to}` };
   }
 }
