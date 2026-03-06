@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { RootController } from './root.controller';
 import databaseConfig from './config/database.config';
 import authConfig from './config/auth.config';
 import aiConfig from './config/ai.config';
@@ -47,7 +48,7 @@ import { AiModule } from './modules/ai/ai.module';
     SubscriptionsModule,
     HouseholdModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, RootController],
   providers: [AppService],
 })
 export class AppModule {}

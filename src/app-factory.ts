@@ -29,7 +29,7 @@ export async function createApp(): Promise<INestApplication> {
     // migration optional (e.g. first run, or serverless cold start)
   }
   const app = await NestFactory.create(AppModule);
-  app.setGlobalPrefix('v1');
+  app.setGlobalPrefix('v1', { exclude: ['/'] });
   app.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
