@@ -1,17 +1,33 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 
 let appCache = null;
 
 function getFactoryPath() {
-  const fromCwd = path.join(process.cwd(), 'dist', 'app-factory.js');
-  return fromCwd;
+  return path.join(process.cwd(), 'dist', 'app-factory.js');
+}
+
+function sendError(res, err) {
+  const msg = err && (err.message || String(err));
+  const stack = err && err.stack;
+  console.error('Vercel handler error:', msg, stack || '');
+  const body = {
+    statusCode: 500,
+    error: 'Internal Server Error',
+    message: msg,
+    stack: process.env.VERCEL_DEBUG ? stack : undefined,
+  };
+  res.status(500).setHeader('Content-Type', 'application/json').end(JSON.stringify(body));
 }
 
 async function getApp() {
   if (appCache) return appCache;
   const factoryPath = getFactoryPath();
+  if (!fs.existsSync(factoryPath)) {
+    throw new Error('app-factory not found at: ' + factoryPath + ' (cwd: ' + process.cwd() + ')');
+  }
   const { createApp } = require(factoryPath);
   const app = await createApp();
   appCache = app;
@@ -20,7 +36,6 @@ async function getApp() {
 
 /**
  * Vercel serverless handler: forwards (req, res) to the Nest/Express app.
- * All routes are rewritten to this handler (see vercel.json).
  */
 module.exports = async (req, res) => {
   try {
@@ -28,13 +43,6 @@ module.exports = async (req, res) => {
     const expressApp = app.getHttpAdapter().getInstance();
     expressApp(req, res);
   } catch (err) {
-    console.error('Vercel handler error:', err);
-    res.status(500).setHeader('Content-Type', 'application/json').end(
-      JSON.stringify({
-        statusCode: 500,
-        error: 'Internal Server Error',
-        message: process.env.NODE_ENV === 'production' ? 'Function invocation failed' : (err && (err.message || String(err))),
-      })
-    );
+    sendError(res, err);
   }
 };
