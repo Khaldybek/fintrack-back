@@ -41,7 +41,7 @@ function getPathForNest(req) {
   const rawUrl = req.url || '';
   // 0) Already correct path (e.g. when Vercel invokes main.js with original URL)
   if (rawUrl.startsWith('/v1') || rawUrl === '/') return rawUrl;
-  // 1) path from query (rewrite destination: /api?path=/$1)
+  // 1) path from query (vercel.json rewrite "/:path*" -> "/api" adds ?path=...)
   const q = rawUrl.indexOf('?');
   const query = q >= 0 ? rawUrl.slice(q + 1) : '';
   const pathParam = query.split('&').find((p) => p.startsWith('path='));
@@ -49,7 +49,8 @@ function getPathForNest(req) {
     const eq = pathParam.indexOf('=');
     const value = eq >= 0 ? pathParam.slice(eq + 1) : '';
     try {
-      const decoded = decodeURIComponent(value).replace(/^\/+/, '/') || '/';
+      let decoded = decodeURIComponent(value).replace(/^\/+/, '/') || '/';
+      if (decoded !== '/' && !decoded.startsWith('/')) decoded = '/' + decoded;
       const rest = query.split('&').filter((p) => !p.startsWith('path=')).join('&');
       return rest ? decoded + (decoded.includes('?') ? '&' : '?') + rest : decoded;
     } catch (_) {}

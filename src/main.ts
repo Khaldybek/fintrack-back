@@ -21,7 +21,8 @@ function getPathForNest(req: any): string {
     const eq = pathParam.indexOf('=');
     const value = eq >= 0 ? pathParam.slice(eq + 1) : '';
     try {
-      const decoded = decodeURIComponent(value).replace(/^\/+/, '/') || '/';
+      let decoded = decodeURIComponent(value).replace(/^\/+/, '/') || '/';
+      if (decoded !== '/' && !decoded.startsWith('/')) decoded = '/' + decoded;
       const rest = query.split('&').filter((p: string) => !p.startsWith('path=')).join('&');
       return rest ? decoded + (decoded.includes('?') ? '&' : '?') + rest : decoded;
     } catch (_) {}
