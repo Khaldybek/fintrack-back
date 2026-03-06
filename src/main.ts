@@ -1,3 +1,4 @@
+import '@nestjs/core';
 import { createApp } from './app-factory';
 
 async function bootstrap() {
