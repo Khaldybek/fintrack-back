@@ -3,17 +3,28 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Account } from '../accounts/entities/account.entity';
 import { Transaction } from '../transactions/entities/transaction.entity';
+import { AiService } from '../ai/ai.service';
 import { toMoneyDto } from '../../common/money.util';
 import { getCurrentMonthRange } from '../../common/date.util';
+import { getMonthNameRu } from '../ai/prompts/monthly-summary.prompt';
 import type { User } from '../users/entities/user.entity';
+
+const MONTHLY_SUMMARY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const NO_DATA_TEXT = 'Нет данных за период.';
 
 @Injectable()
 export class AnalyticsService {
+  private readonly monthlySummaryCache = new Map<
+    string,
+    { summaryText: string; shareReadyText: string; expiresAt: number }
+  >();
+
   constructor(
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
     @InjectRepository(Transaction)
     private readonly txRepo: Repository<Transaction>,
+    private readonly aiService: AiService,
   ) {}
 
   private async accountIds(userId: string): Promise<string[]> {
@@ -325,4 +336,84 @@ export class AnalyticsService {
     };
   }
 
+  async getMonthlyReportSummary(
+    user: User,
+    year: number,
+    month: number,
+  ): Promise<{ summaryText: string; shareReadyText: string }> {
+    const cacheKey = `${user.id}:${year}:${month}`;
+    const now = Date.now();
+    const cached = this.monthlySummaryCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return { summaryText: cached.summaryText, shareReadyText: cached.shareReadyText };
+    }
+
+    const dateFrom = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const dateTo = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+    const ids = await this.accountIds(user.id);
+    let incomeMinor = 0;
+    let expenseMinor = 0;
+    if (ids.length > 0) {
+      const row = await this.txRepo
+        .createQueryBuilder('t')
+        .select('SUM(CASE WHEN t.amount_minor > 0 THEN t.amount_minor ELSE 0 END)', 'income')
+        .addSelect('SUM(CASE WHEN t.amount_minor < 0 THEN ABS(t.amount_minor) ELSE 0 END)', 'expense')
+        .where('t.account_id IN (:...ids)', { ids })
+        .andWhere('t.date >= :from', { from: dateFrom })
+        .andWhere('t.date <= :to', { to: dateTo })
+        .andWhere('t.deleted_at IS NULL')
+        .getRawOne<{ income: string; expense: string }>();
+      incomeMinor = Number(row?.income) || 0;
+      expenseMinor = Number(row?.expense) || 0;
+    }
+
+    const savingsMinor = incomeMinor - expenseMinor;
+    const currency = 'KZT';
+
+    if (incomeMinor === 0 && expenseMinor === 0) {
+      return { summaryText: NO_DATA_TEXT, shareReadyText: NO_DATA_TEXT };
+    }
+
+    const topCat = await this.topCategories(user, dateFrom, dateTo, 5);
+    const top_categories = topCat.items.map((r) => ({
+      name: r.name,
+      expense_minor: r.expense_minor ?? 0,
+    }));
+
+    if (this.aiService.isEnabled()) {
+      const result = await this.aiService.generateMonthlySummary({
+        year,
+        month,
+        month_name_ru: getMonthNameRu(month),
+        income_minor: incomeMinor,
+        expense_minor: expenseMinor,
+        savings_minor: savingsMinor,
+        currency,
+        top_categories,
+      });
+      if (result) {
+        this.monthlySummaryCache.set(cacheKey, {
+          summaryText: result.summaryText,
+          shareReadyText: result.shareReadyText,
+          expiresAt: now + MONTHLY_SUMMARY_CACHE_TTL_MS,
+        });
+        this.pruneMonthlySummaryCache();
+        return result;
+      }
+    }
+
+    const summaryText =
+      `За ${getMonthNameRu(month)} ${year}: доход ${incomeMinor.toLocaleString('ru-KZ')} ${currency}, расход ${expenseMinor.toLocaleString('ru-KZ')} ${currency}. Накопления: ${savingsMinor.toLocaleString('ru-KZ')} ${currency}.`;
+    const shareReadyText = `Мой ${getMonthNameRu(month)} ${year}: ${savingsMinor >= 0 ? '+' : ''}${savingsMinor.toLocaleString('ru-KZ')} ${currency} накоплений.`;
+    return { summaryText, shareReadyText };
+  }
+
+  private pruneMonthlySummaryCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.monthlySummaryCache.entries()) {
+      if (entry.expiresAt <= now) this.monthlySummaryCache.delete(key);
+    }
+  }
 }

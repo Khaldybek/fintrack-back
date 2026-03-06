@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import databaseConfig from './config/database.config';
 import authConfig from './config/auth.config';
+import aiConfig from './config/ai.config';
 import { AuthModule } from './modules/auth/auth.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
 import { CategoriesModule } from './modules/categories/categories.module';
@@ -17,12 +18,13 @@ import { CreditsModule } from './modules/credits/credits.module';
 import { SecurityModule } from './modules/security/security.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { HouseholdModule } from './modules/household/household.module';
+import { AiModule } from './modules/ai/ai.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [databaseConfig, authConfig],
+      load: [databaseConfig, authConfig, aiConfig],
       envFilePath: ['.env'],
     }),
     TypeOrmModule.forRootAsync({
@@ -32,6 +34,7 @@ import { HouseholdModule } from './modules/household/household.module';
         configService.getOrThrow('database'),
     }),
     AuthModule,
+    AiModule,
     AccountsModule,
     CategoriesModule,
     TransactionsModule,

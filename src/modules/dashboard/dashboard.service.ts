@@ -4,8 +4,12 @@ import { Repository } from 'typeorm';
 import { Account } from '../accounts/entities/account.entity';
 import { Transaction } from '../transactions/entities/transaction.entity';
 import { SalarySchedule } from './entities/salary-schedule.entity';
+import { AiService } from '../ai/ai.service';
 import { toMoneyDto } from '../../common/money.util';
+import { getTodayInTimezone } from '../../common/date.util';
 import type { User } from '../users/entities/user.entity';
+
+const INSIGHT_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const DEFAULT_CURRENCY = 'KZT';
 const LOW_BALANCE_THRESHOLD_MINOR = 50_000; // 500 KZT if 1 unit = 1 tenge
@@ -30,8 +34,12 @@ function getCurrentMonthRange(timezone: string): { dateFrom: string; dateTo: str
   return { dateFrom, dateTo };
 }
 
+type InsightCacheEntry = { text: string; severity: 'good' | 'attention' | 'risk'; status: string; expiresAt: number };
+
 @Injectable()
 export class DashboardService {
+  private readonly insightCache = new Map<string, InsightCacheEntry>();
+
   constructor(
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
@@ -39,6 +47,7 @@ export class DashboardService {
     private readonly transactionRepo: Repository<Transaction>,
     @InjectRepository(SalarySchedule)
     private readonly salaryRepo: Repository<SalarySchedule>,
+    private readonly aiService: AiService,
   ) {}
 
   async getSummary(user: User) {
@@ -100,6 +109,25 @@ export class DashboardService {
     const status = projectedBalanceMinor < 0 ? 'risk' : projectedBalanceMinor < LOW_BALANCE_THRESHOLD_MINOR ? 'attention' : 'stable';
     const severity = projectedBalanceMinor < 0 ? 'risk' : projectedBalanceMinor < LOW_BALANCE_THRESHOLD_MINOR ? 'attention' : 'good';
 
+    const explanation =
+      projectedBalanceMinor < 0
+        ? `Прогноз: к концу месяца баланс может уйти в минус (${summary.currency}).`
+        : daysLeft === 0
+          ? 'Конец месяца.'
+          : `Прогноз на конец месяца: ${toMoneyDto(projectedBalanceMinor, summary.currency).formatted}.`;
+
+    let explanationAi: string | null = null;
+    if (this.aiService.isEnabled()) {
+      explanationAi =
+        (await this.aiService.explainForecast({
+          balance_minor: balance,
+          projected_balance_minor: projectedBalanceMinor,
+          status: status as 'stable' | 'attention' | 'risk',
+          days_left: daysLeft,
+          currency: summary.currency,
+        })) ?? null;
+    }
+
     return {
       balance: toMoneyDto(balance, summary.currency),
       projected_balance: toMoneyDto(projectedBalanceMinor, summary.currency),
@@ -108,12 +136,8 @@ export class DashboardService {
       days_left: daysLeft,
       status,
       severity,
-      explanation:
-        projectedBalanceMinor < 0
-          ? `Прогноз: к концу месяца баланс может уйти в минус (${summary.currency}).`
-          : daysLeft === 0
-            ? 'Конец месяца.'
-            : `Прогноз на конец месяца: ${toMoneyDto(projectedBalanceMinor, summary.currency).formatted}.`,
+      explanation,
+      explanationAi: explanationAi ?? undefined,
       timezone_hint: user.timezone,
     };
   }
@@ -207,12 +231,55 @@ export class DashboardService {
     if (schedule) await this.salaryRepo.remove(schedule);
   }
 
-  async getInsight(_user: User) {
-    return {
-      text: 'Проверьте остаток до конца месяца — прогноз в разделе «Прогноз».',
-      severity: 'good' as const,
-      status: 'stable',
-    };
+  async getInsight(user: User) {
+    const dateStr = getTodayInTimezone(user.timezone ?? 'UTC');
+    const cacheKey = `insight:${user.id}:${dateStr}`;
+    const now = Date.now();
+    const cached = this.insightCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) {
+      return { text: cached.text, severity: cached.severity, status: cached.status };
+    }
+
+    const summary = await this.getSummary(user);
+    const forecast = await this.getForecast(user);
+    const severity = forecast.severity as 'good' | 'attention' | 'risk';
+    const status = forecast.status;
+
+    if (this.aiService.isEnabled()) {
+      const text = await this.aiService.generateInsight({
+        balance_minor: summary.balance_total_minor,
+        income_minor: summary.income_minor,
+        expense_minor: summary.expense_minor,
+        projected_balance_minor: forecast.projected_balance_minor,
+        forecast_status: forecast.status as 'stable' | 'attention' | 'risk',
+        days_left_in_month: forecast.days_left,
+        currency: summary.currency,
+      });
+      if (text) {
+        const entry: InsightCacheEntry = {
+          text,
+          severity,
+          status,
+          expiresAt: now + INSIGHT_CACHE_TTL_MS,
+        };
+        this.insightCache.set(cacheKey, entry);
+        this.pruneInsightCache();
+        return { text, severity, status };
+      }
+    }
+
+    const fallbackText =
+      forecast.projected_balance_minor < 0
+        ? 'Прогноз: к концу месяца баланс может уйти в минус. Рекомендуем сократить расходы или пополнить счёт.'
+        : 'Проверьте остаток до конца месяца — прогноз в разделе «Прогноз».';
+    return { text: fallbackText, severity, status };
+  }
+
+  private pruneInsightCache(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.insightCache.entries()) {
+      if (entry.expiresAt <= now) this.insightCache.delete(key);
+    }
   }
 
   /** Финансовый индекс 0–100, status, factors (Pro-фича) */

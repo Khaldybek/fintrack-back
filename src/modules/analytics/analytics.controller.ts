@@ -65,6 +65,20 @@ export class AnalyticsController {
     return this.analytics.savingsRate(user, Number.isInteger(m) && m >= 1 && m <= 24 ? m : 6);
   }
 
+  @Get('monthly-report/summary')
+  monthlyReportSummary(
+    @CurrentUser() user: User,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+  ) {
+    const now = new Date();
+    const y = year ? parseInt(year, 10) : now.getFullYear();
+    const m = month ? parseInt(month, 10) : now.getMonth() + 1;
+    const validYear = Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : now.getFullYear();
+    const validMonth = Number.isInteger(m) && m >= 1 && m <= 12 ? m : now.getMonth() + 1;
+    return this.analytics.getMonthlyReportSummary(user, validYear, validMonth);
+  }
+
   @Get('compare')
   compare(
     @CurrentUser() user: User,

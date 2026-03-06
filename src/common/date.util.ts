@@ -34,3 +34,25 @@ function getCurrentMonthRangeUTC(): { dateFrom: string; dateTo: string } {
   const dateTo = `${y}-${month}-${String(lastDay).padStart(2, '0')}`;
   return { dateFrom, dateTo };
 }
+
+/** Today in timezone as YYYY-MM-DD (for relative date resolution in AI). */
+export function getTodayInTimezone(timezone: string): string {
+  const tz = timezone?.trim() || 'UTC';
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const parts = formatter.formatToParts(new Date());
+    const year = parts.find((p) => p.type === 'year')?.value;
+    const month = parts.find((p) => p.type === 'month')?.value;
+    const day = parts.find((p) => p.type === 'day')?.value;
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch {
+    // fallback
+  }
+  const now = new Date();
+  return now.toISOString().slice(0, 10);
+}

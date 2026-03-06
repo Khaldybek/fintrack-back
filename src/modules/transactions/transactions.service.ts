@@ -11,8 +11,27 @@ import { SetSplitsDto } from './dto/set-splits.dto';
 import { QueryTransactionsDto } from './dto/query-transactions.dto';
 import { AccountsService } from '../accounts/accounts.service';
 import { CategoriesService } from '../categories/categories.service';
+import { AiService } from '../ai/ai.service';
 import { toMoneyDto } from '../../common/money.util';
+import { getTodayInTimezone } from '../../common/date.util';
 import { CreateTransactionTemplateDto } from './dto/create-template.dto';
+import type { SuggestCategoryDto } from './dto/suggest-category.dto';
+
+export type SuggestCategoryResult = {
+  categoryId: string | null;
+  categoryName: string;
+  merchantCanonical: string;
+  confidence: number;
+};
+
+export type VoiceParseResult = {
+  amountMinor: number;
+  categoryId: string | null;
+  date: string;
+  memo: string | null;
+  accountId: string | null;
+  confidence: number;
+};
 
 @Injectable()
 export class TransactionsService {
@@ -27,6 +46,7 @@ export class TransactionsService {
     private readonly accountRepo: Repository<Account>,
     private readonly accountsService: AccountsService,
     private readonly categoriesService: CategoriesService,
+    private readonly aiService: AiService,
   ) {}
 
   async findAllByUser(userId: string, query: QueryTransactionsDto) {
@@ -143,25 +163,171 @@ export class TransactionsService {
     await this.repo.softRemove(tx);
   }
 
-  async voiceParse(text: string): Promise<{ amountMinor: number; categoryId?: string | null; memo?: string | null }> {
+  async voiceParse(userId: string, text: string, timezone: string): Promise<VoiceParseResult> {
     const trimmed = (text || '').trim();
+    const referenceDate = getTodayInTimezone(timezone || 'UTC');
+
+    if (this.aiService.isEnabled() && trimmed.length > 0) {
+      const categories = await this.categoriesService.findAllByUser(userId);
+      const accountsList = (await this.accountsService.findAllByUser(userId)) as Array<{ id: string; name: string }>;
+      const categoryNames = categories.map((c) => c.name);
+      const accountNames = accountsList.map((a) => a.name);
+      const raw = await this.aiService.parseTransactionFromText(trimmed, {
+        referenceDate,
+        categoryNames,
+        accountNames,
+      });
+      if (raw) {
+        const categoryId =
+          raw.category_name.trim() !== ''
+            ? categories.find((c) => c.name === raw.category_name)?.id ?? null
+            : null;
+        const accountId =
+          raw.account_name.trim() !== ''
+            ? accountsList.find((a) => a.name === raw.account_name)?.id ?? null
+            : null;
+        return {
+          amountMinor: raw.amount_minor,
+          categoryId,
+          date: raw.date || referenceDate,
+          memo: raw.memo?.trim() || null,
+          accountId,
+          confidence: Math.min(1, Math.max(0, raw.confidence)),
+        };
+      }
+    }
+
     const match = trimmed.match(/(\d+(?:[.,]\d{1,2})?)/);
     let amountMinor = 0;
     if (match) {
       const num = parseFloat(match[1].replace(',', '.'));
-      amountMinor = Math.round(num * 100);
+      amountMinor = -Math.round(num * 100);
     }
-    return { amountMinor, categoryId: null, memo: trimmed || null };
+    return {
+      amountMinor,
+      categoryId: null,
+      date: referenceDate,
+      memo: trimmed || null,
+      accountId: null,
+      confidence: 0.5,
+    };
   }
 
-  /** OCR чека (stub: возвращает заглушку) */
-  async receiptOcr(file: Express.Multer.File | undefined): Promise<{
+  /** Keyword fallback for suggestCategory: memo substring → default category name */
+  private static readonly SUGGEST_CATEGORY_KEYWORDS: Array<{ pattern: RegExp; categoryName: string }> = [
+    { pattern: /такси|uber|yandex|bolt|in drive/i, categoryName: 'Транспорт' },
+    { pattern: /магнум|гастроном|продукт|еда|шаруа|спар|пятёрочка/i, categoryName: 'Еда' },
+    { pattern: /жкх|квартир|аренд|коммунал|жильё/i, categoryName: 'Жильё' },
+    { pattern: /аптек|клиник|врач|здоровье|медицин/i, categoryName: 'Здоровье' },
+    { pattern: /кино|подписк|netflix|развлеч|игр/i, categoryName: 'Развлечения' },
+    { pattern: /зарплат|доход|пополнение/i, categoryName: 'Зарплата' },
+  ];
+
+  async suggestCategory(
+    userId: string,
+    dto: SuggestCategoryDto,
+  ): Promise<SuggestCategoryResult> {
+    const memo = (dto.memo ?? '').trim();
+    const categories = await this.categoriesService.findAllByUser(userId);
+    const categoryNames = categories.map((c) => c.name);
+    const expenseCategories = categories.filter((c) => c.type === 'expense');
+    const fallbackCategory = expenseCategories.find((c) => c.name === 'Прочее') ?? expenseCategories[0];
+
+    if (this.aiService.isEnabled() && memo.length > 0) {
+      const raw = await this.aiService.suggestCategory(memo, categoryNames);
+      if (raw) {
+        const category = categories.find((c) => c.name === raw.category_name);
+        const categoryId = category?.id ?? fallbackCategory?.id ?? null;
+        const categoryName =
+          (category?.name ?? raw.category_name?.trim()) || (fallbackCategory?.name ?? 'Прочее');
+        return {
+          categoryId,
+          categoryName,
+          merchantCanonical: raw.merchant_canonical?.trim() || memo,
+          confidence: Math.min(1, Math.max(0, raw.confidence)),
+        };
+      }
+    }
+
+    for (const { pattern, categoryName } of TransactionsService.SUGGEST_CATEGORY_KEYWORDS) {
+      if (pattern.test(memo)) {
+        const cat = categories.find((c) => c.name === categoryName);
+        if (cat) {
+          return {
+            categoryId: cat.id,
+            categoryName: cat.name,
+            merchantCanonical: memo,
+            confidence: 0.6,
+          };
+        }
+      }
+    }
+    return {
+      categoryId: fallbackCategory?.id ?? null,
+      categoryName: fallbackCategory?.name ?? 'Прочее',
+      merchantCanonical: memo,
+      confidence: 0.4,
+    };
+  }
+
+  private static readonly RECEIPT_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+  private static readonly RECEIPT_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+
+  async receiptOcr(
+    userId: string,
+    file: Express.Multer.File | undefined,
+  ): Promise<{
     amountMinor: number;
-    date?: string | null;
-    memo?: string | null;
-    categoryId?: string | null;
+    date: string | null;
+    memo: string | null;
+    categoryId: string | null;
+    items: never[];
   }> {
-    return { amountMinor: 0, date: null, memo: null, categoryId: null };
+    const empty = {
+      amountMinor: 0,
+      date: null as string | null,
+      memo: null as string | null,
+      categoryId: null as string | null,
+      items: [] as never[],
+    };
+    if (!file) return empty;
+    const rawBuffer = (file as { buffer?: Buffer }).buffer ?? null;
+    const size = file.size ?? rawBuffer?.length ?? 0;
+    if (!rawBuffer?.length && !(file as { path?: string }).path) return empty;
+    if (size > TransactionsService.RECEIPT_MAX_SIZE) return empty;
+    const mime = (file.mimetype || '').toLowerCase();
+    if (!TransactionsService.RECEIPT_MIMES.includes(mime)) return empty;
+
+    let buffer: Buffer;
+    if (rawBuffer?.length) {
+      buffer = rawBuffer;
+    } else {
+      try {
+        const fs = await import('fs/promises');
+        buffer = await fs.readFile((file as { path: string }).path);
+      } catch {
+        return empty;
+      }
+    }
+    const base64 = buffer.toString('base64');
+    const raw =
+      this.aiService.isEnabled() && (await this.aiService.extractReceipt(base64, mime || 'image/jpeg'));
+    if (!raw) return empty;
+
+    const memo = raw.memo?.trim() || null;
+    const date = raw.date?.trim() && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : null;
+    let categoryId: string | null = null;
+    if (memo) {
+      const suggest = await this.suggestCategory(userId, { memo, amountMinor: raw.amount_minor });
+      categoryId = suggest.categoryId;
+    }
+    return {
+      amountMinor: raw.amount_minor,
+      date,
+      memo,
+      categoryId,
+      items: [],
+    };
   }
 
   async setSplits(transactionId: string, userId: string, dto: SetSplitsDto) {

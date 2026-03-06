@@ -21,6 +21,7 @@ import { UpdateTransactionDto } from './dto/update-transaction.dto';
 import { QueryTransactionsDto } from './dto/query-transactions.dto';
 import { CreateTransactionTemplateDto } from './dto/create-template.dto';
 import { SetSplitsDto } from './dto/set-splits.dto';
+import { SuggestCategoryDto } from './dto/suggest-category.dto';
 import { VoiceParseDto } from './dto/voice-parse.dto';
 
 @Controller('transactions')
@@ -29,14 +30,19 @@ export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
   @Post('voice-parse')
-  voiceParse(@Body() dto: VoiceParseDto) {
-    return this.transactionsService.voiceParse(dto.text);
+  voiceParse(@Body() dto: VoiceParseDto, @CurrentUser() user: User) {
+    return this.transactionsService.voiceParse(user.id, dto.text, user.timezone);
   }
 
   @Post('receipt-ocr')
   @UseInterceptors(FileInterceptor('file'))
-  receiptOcr(@UploadedFile() file: Express.Multer.File) {
-    return this.transactionsService.receiptOcr(file);
+  receiptOcr(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: User) {
+    return this.transactionsService.receiptOcr(user.id, file);
+  }
+
+  @Post('suggest-category')
+  suggestCategory(@Body() dto: SuggestCategoryDto, @CurrentUser() user: User) {
+    return this.transactionsService.suggestCategory(user.id, dto);
   }
 
   @Get('templates')
