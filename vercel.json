@@ -3,7 +3,7 @@
   "buildCommand": "npm run build",
   "builds": [
     {
-      "src": "dist/vercel-entry.js",
+      "src": "index.js",
       "use": "@vercel/node",
       "config": {
         "includeFiles": "dist/**"
@@ -13,7 +13,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "dist/vercel-entry.js"
+      "dest": "index.js"
     }
   ]
 }
