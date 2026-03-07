@@ -1,9 +1,14 @@
-import { IsOptional, IsUUID, IsInt, Min, Max, Matches } from 'class-validator';
+import { IsOptional, IsUUID, IsInt, Min, Max, Matches, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export class QueryTransactionsDto {
+  /** Vercel rewrite injects path; we strip it in api/index.js but allow it here as fallback */
+  @IsOptional()
+  @IsString()
+  path?: string;
+
   @IsOptional()
   @IsUUID()
   accountId?: string;

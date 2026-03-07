@@ -47,6 +47,7 @@ function getPathForNest(req) {
 module.exports = async (req, res) => {
   try {
     req.url = getPathForNest(req);
+    if (req.query && typeof req.query === 'object') delete req.query.path;
     const app = await getApp();
     app.getHttpAdapter().getInstance()(req, res);
   } catch (err) {
