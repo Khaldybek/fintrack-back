@@ -1,7 +1,7 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "rewrites": [{ "source": "/:path*", "destination": "/api" }],
+  "rewrites": [{ "source": "/:path*", "destination": "/api?path=/:path*" }],
   "functions": {
     "api/index.js": {
       "memory": 1024,
