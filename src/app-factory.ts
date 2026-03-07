@@ -63,5 +63,7 @@ export async function createApp(): Promise<INestApplication> {
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
+  // Required for serverless handlers that do not call app.listen().
+  await app.init();
   return app;
 }
