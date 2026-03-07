@@ -1,5 +1,7 @@
-import { IsOptional, IsUUID, IsDateString, IsInt, Min, Max } from 'class-validator';
+import { IsOptional, IsUUID, IsInt, Min, Max, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export class QueryTransactionsDto {
   @IsOptional()
@@ -11,11 +13,11 @@ export class QueryTransactionsDto {
   categoryId?: string;
 
   @IsOptional()
-  @IsDateString()
+  @Matches(DATE_PATTERN, { message: 'dateFrom must be YYYY-MM-DD' })
   dateFrom?: string;
 
   @IsOptional()
-  @IsDateString()
+  @Matches(DATE_PATTERN, { message: 'dateTo must be YYYY-MM-DD' })
   dateTo?: string;
 
   @IsOptional()
