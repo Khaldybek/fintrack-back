@@ -153,11 +153,12 @@ export class AuthService {
 
   async clearRefreshCookie(res: Response): Promise<void> {
     const cookieName = this.config.getOrThrow<string>('auth.cookie.refreshName');
+    const opts = this.config.get('auth.cookie.options') as { secure?: boolean; sameSite?: 'lax' | 'strict' | 'none' };
     res.clearCookie(cookieName, {
       path: '/',
       httpOnly: true,
-      secure: this.config.get('auth.cookie.options.secure') ?? false,
-      sameSite: 'lax',
+      secure: opts?.secure ?? false,
+      sameSite: opts?.sameSite ?? 'lax',
     });
   }
 
