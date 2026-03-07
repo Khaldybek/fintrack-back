@@ -9,13 +9,18 @@ export default registerAs('auth', () => ({
   },
   cookie: {
     refreshName: process.env.REFRESH_COOKIE_NAME ?? 'fintrack_refresh',
-    options: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: (process.env.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none') ?? 'lax',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
-    },
+    options: (() => {
+      const sameSite = (process.env.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none') ?? 'lax';
+      // sameSite=none требует Secure=true (cross-site context)
+      const secure = sameSite === 'none' || process.env.NODE_ENV === 'production';
+      return {
+        httpOnly: true,
+        secure,
+        sameSite,
+        path: '/',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      };
+    })(),
   },
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID ?? '',
