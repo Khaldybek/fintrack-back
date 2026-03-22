@@ -20,6 +20,7 @@ import { SecurityModule } from './modules/security/security.module';
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { HouseholdModule } from './modules/household/household.module';
 import { AiModule } from './modules/ai/ai.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { AiModule } from './modules/ai/ai.module';
     SecurityModule,
     SubscriptionsModule,
     HouseholdModule,
+    NotificationsModule,
   ],
   controllers: [AppController, RootController],
   providers: [AppService],

@@ -6,10 +6,12 @@ import { HouseholdController } from './household.controller';
 import { HouseholdService } from './household.service';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
+import { Account } from '../accounts/entities/account.entity';
+import { Transaction } from '../transactions/entities/transaction.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Household, HouseholdMember]),
+    TypeOrmModule.forFeature([Household, HouseholdMember, Account, Transaction]),
     AuthModule,
     UsersModule,
   ],

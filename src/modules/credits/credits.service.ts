@@ -27,6 +27,51 @@ function daysUntil(dateStr: string): number {
   return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+type LoanSimulation = {
+  feasible: boolean;
+  months: number;
+  totalPaidMinor: number;
+  totalInterestMinor: number;
+};
+
+function simulateLoan(loan: CreditLoan, monthlyPaymentMinor: number): LoanSimulation {
+  const principal = Number(loan.principalMinor) || 0;
+  const payment = Number(monthlyPaymentMinor) || 0;
+  if (principal <= 0 || payment <= 0) {
+    return { feasible: false, months: 0, totalPaidMinor: 0, totalInterestMinor: 0 };
+  }
+
+  const monthlyRate = (Number(loan.ratePct) || 0) / 100 / 12;
+  const maxMonths = 1200;
+  let balance = principal;
+  let months = 0;
+  let totalPaid = 0;
+
+  while (balance > 0.01 && months < maxMonths) {
+    const interest = monthlyRate > 0 ? balance * monthlyRate : 0;
+    if (payment <= interest + 0.01) {
+      return {
+        feasible: false,
+        months,
+        totalPaidMinor: Math.round(totalPaid),
+        totalInterestMinor: Math.max(0, Math.round(totalPaid - (principal - balance))),
+      };
+    }
+    const monthPayment = Math.min(payment, balance + interest);
+    balance = balance + interest - monthPayment;
+    totalPaid += monthPayment;
+    months += 1;
+  }
+
+  if (balance > 0.01) {
+    return { feasible: false, months, totalPaidMinor: Math.round(totalPaid), totalInterestMinor: Math.max(0, Math.round(totalPaid - principal)) };
+  }
+
+  const totalPaidMinor = Math.round(totalPaid);
+  const totalInterestMinor = Math.max(0, totalPaidMinor - principal);
+  return { feasible: true, months, totalPaidMinor, totalInterestMinor };
+}
+
 @Injectable()
 export class CreditsService {
   constructor(
@@ -106,17 +151,31 @@ export class CreditsService {
     const totalMonthly = list.reduce((s, c) => s + c.monthlyPaymentMinor, 0);
     const currency = list[0]?.currency ?? 'KZT';
     const income = monthlyIncomeMinor ?? 0;
-    const debtToIncomePct = income > 0 ? Math.round((totalMonthly / income) * 100) : 0;
-    const severity = debtToIncomePct >= 50 ? 'risk' : debtToIncomePct >= 30 ? 'attention' : 'good';
+    const debtToIncomePct = income > 0 ? Math.round((totalMonthly / income) * 100) : null;
+    const severity = debtToIncomePct === null ? 'attention' : debtToIncomePct >= 50 ? 'risk' : debtToIncomePct >= 30 ? 'attention' : 'good';
+    const avgRatePct =
+      totalDebt > 0
+        ? Math.round(
+            (list.reduce((sum, c) => sum + Number(c.ratePct) * c.principalMinor, 0) / totalDebt) * 100,
+          ) / 100
+        : 0;
     return {
       total_debt: toMoneyDto(totalDebt, currency),
       total_debt_minor: totalDebt,
       total_monthly_payment: toMoneyDto(totalMonthly, currency),
       total_monthly_payment_minor: totalMonthly,
+      avg_rate_pct: avgRatePct,
       debt_to_income_percent: debtToIncomePct,
       severity,
       status: severity,
-      explanation: debtToIncomePct >= 50 ? 'Высокая долговая нагрузка (>50%).' : debtToIncomePct >= 30 ? 'Умеренная нагрузка (30–50%).' : 'Нормальная нагрузка (<30%).',
+      explanation:
+        debtToIncomePct === null
+          ? 'Для оценки долговой нагрузки передайте monthlyIncomeMinor.'
+          : debtToIncomePct >= 50
+            ? 'Высокая долговая нагрузка (>50%).'
+            : debtToIncomePct >= 30
+              ? 'Умеренная нагрузка (30–50%).'
+              : 'Нормальная нагрузка (<30%).',
       currency,
     };
   }
@@ -155,19 +214,64 @@ export class CreditsService {
 
   async simulatePrepayment(userId: string, extraPerMonthMinor: number) {
     const list = await this.repo.find({ where: { userId } });
+    if (list.length === 0) {
+      return {
+        extra_per_month: toMoneyDto(extraPerMonthMinor, 'KZT'),
+        new_total_monthly: toMoneyDto(extraPerMonthMinor, 'KZT'),
+        estimated_months_to_payoff: 0,
+        estimated_overpayment: toMoneyDto(0, 'KZT'),
+        severity: 'good',
+      };
+    }
     const totalMonthly = list.reduce((s, c) => s + c.monthlyPaymentMinor, 0);
     const newMonthly = totalMonthly + extraPerMonthMinor;
     const totalDebt = list.reduce((s, c) => s + c.principalMinor, 0);
     const currency = list[0]?.currency ?? 'KZT';
-    const monthsToPayoff = newMonthly > 0 ? Math.ceil(totalDebt / newMonthly) : 0;
-    const totalPayment = newMonthly * monthsToPayoff;
-    const overpayment = totalPayment - totalDebt;
+    const baseRuns = list.map((loan) => simulateLoan(loan, loan.monthlyPaymentMinor));
+
+    const largestIdx = list.reduce((bestIdx, loan, idx, arr) =>
+      loan.principalMinor > arr[bestIdx].principalMinor ? idx : bestIdx, 0);
+    const extraByLoan = list.map((loan, idx) => {
+      if (idx === largestIdx) return 0;
+      return Math.floor((extraPerMonthMinor * loan.principalMinor) / Math.max(1, totalDebt));
+    });
+    const assignedExtra = extraByLoan.reduce((sum, v) => sum + v, 0);
+    extraByLoan[largestIdx] += extraPerMonthMinor - assignedExtra;
+    const extraRuns = list.map((loan, idx) =>
+      simulateLoan(loan, loan.monthlyPaymentMinor + extraByLoan[idx]),
+    );
+
+    const baseFeasible = baseRuns.every((r) => r.feasible);
+    const extraFeasible = extraRuns.every((r) => r.feasible);
+    if (!baseFeasible || !extraFeasible) {
+      return {
+        extra_per_month: toMoneyDto(extraPerMonthMinor, currency),
+        new_total_monthly: toMoneyDto(newMonthly, currency),
+        estimated_months_to_payoff: null,
+        estimated_overpayment: null,
+        severity: 'risk',
+        explanation:
+          'Для одного или нескольких кредитов ежемесячный платеж меньше начисляемых процентов. Проверьте ставку/платеж.',
+      };
+    }
+
+    const baseMonths = baseRuns.reduce((max, run) => Math.max(max, run.months), 0);
+    const baseInterest = baseRuns.reduce((sum, run) => sum + run.totalInterestMinor, 0);
+    const extraMonths = extraRuns.reduce((max, run) => Math.max(max, run.months), 0);
+    const extraInterest = extraRuns.reduce((sum, run) => sum + run.totalInterestMinor, 0);
+    const monthsSaved = Math.max(0, baseMonths - extraMonths);
+    const interestSaved = Math.max(0, baseInterest - extraInterest);
+
     return {
       extra_per_month: toMoneyDto(extraPerMonthMinor, currency),
       new_total_monthly: toMoneyDto(newMonthly, currency),
-      estimated_months_to_payoff: monthsToPayoff,
-      estimated_overpayment: toMoneyDto(overpayment, currency),
-      severity: 'good',
+      baseline_months_to_payoff: baseMonths,
+      estimated_months_to_payoff: extraMonths,
+      months_saved: monthsSaved,
+      baseline_overpayment: toMoneyDto(baseInterest, currency),
+      estimated_overpayment: toMoneyDto(extraInterest, currency),
+      interest_saved: toMoneyDto(interestSaved, currency),
+      severity: monthsSaved > 0 || interestSaved > 0 ? 'good' : 'attention',
     };
   }
 }

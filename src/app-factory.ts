@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import { runGoalsBigintMigration } from './database/run-goals-bigint-migration';
+import { runSalarySchedulesAmountMigration } from './database/run-salary-schedules-amount-migration';
 
 function loadEnv(): void {
   const path = join(process.cwd(), '.env');
@@ -25,6 +26,11 @@ export async function createApp(): Promise<INestApplication> {
   loadEnv();
   try {
     await runGoalsBigintMigration();
+  } catch {
+    // migration optional (e.g. first run, or serverless cold start)
+  }
+  try {
+    await runSalarySchedulesAmountMigration();
   } catch {
     // migration optional (e.g. first run, or serverless cold start)
   }

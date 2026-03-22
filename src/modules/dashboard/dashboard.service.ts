@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Account } from '../accounts/entities/account.entity';
@@ -13,6 +13,7 @@ const INSIGHT_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const DEFAULT_CURRENCY = 'KZT';
 const LOW_BALANCE_THRESHOLD_MINOR = 50_000; // 500 KZT if 1 unit = 1 tenge
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Start and end of current month in user timezone as YYYY-MM-DD */
 function getCurrentMonthRange(timezone: string): { dateFrom: string; dateTo: string } {
@@ -91,6 +92,137 @@ export class DashboardService {
       expense: toMoneyDto(expenseMinor, currency),
       expense_minor: expenseMinor,
       timezone_hint: user.timezone,
+    };
+  }
+
+  /**
+   * Aggregated chart data for home dashboard widgets.
+   * Returns daily expenses, category split and monthly cashflow trend.
+   */
+  async getCharts(user: User, dateFrom?: string, dateTo?: string, months: number = 6) {
+    if ((dateFrom && !dateTo) || (!dateFrom && dateTo)) {
+      throw new BadRequestException('dateFrom and dateTo must be provided together');
+    }
+    if (dateFrom && !DATE_PATTERN.test(dateFrom)) {
+      throw new BadRequestException('dateFrom must be YYYY-MM-DD');
+    }
+    if (dateTo && !DATE_PATTERN.test(dateTo)) {
+      throw new BadRequestException('dateTo must be YYYY-MM-DD');
+    }
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      throw new BadRequestException('dateFrom must be less than or equal to dateTo');
+    }
+
+    const accounts = await this.accountRepo.find({
+      where: { userId: user.id },
+      select: ['id', 'currency'],
+    });
+    const accountIds = accounts.map((a) => a.id);
+    const currency = accounts[0]?.currency ?? DEFAULT_CURRENCY;
+    const range = dateFrom && dateTo ? { dateFrom, dateTo } : getCurrentMonthRange(user.timezone);
+    const safeMonths = Number.isInteger(months) && months >= 1 && months <= 24 ? months : 6;
+
+    if (accountIds.length === 0) {
+      return {
+        period: range,
+        currency,
+        expense_by_day: [],
+        expense_by_category: [],
+        cashflow_by_month: [],
+      };
+    }
+
+    const trendEnd = new Date();
+    const trendStart = new Date();
+    trendStart.setMonth(trendStart.getMonth() - safeMonths);
+    const trendFrom = trendStart.toISOString().slice(0, 10);
+    const trendTo = trendEnd.toISOString().slice(0, 10);
+
+    const [dailyRows, categoryRows, monthlyRows] = await Promise.all([
+      this.transactionRepo
+        .createQueryBuilder('t')
+        .select('t.date::text', 'date')
+        .addSelect('SUM(ABS(t.amount_minor))', 'expense')
+        .where('t.account_id IN (:...ids)', { ids: accountIds })
+        .andWhere('t.date >= :dateFrom', { dateFrom: range.dateFrom })
+        .andWhere('t.date <= :dateTo', { dateTo: range.dateTo })
+        .andWhere('t.amount_minor < 0')
+        .andWhere('t.deleted_at IS NULL')
+        .groupBy('t.date::text')
+        .orderBy('date', 'ASC')
+        .getRawMany<{ date: string; expense: string }>(),
+      this.transactionRepo
+        .createQueryBuilder('t')
+        .innerJoin('categories', 'c', 'c.id = t.category_id')
+        .select('t.category_id', 'categoryId')
+        .addSelect('c.name', 'name')
+        .addSelect('c.color', 'color')
+        .addSelect('c.icon', 'icon')
+        .addSelect('SUM(ABS(t.amount_minor))', 'expense')
+        .where('t.account_id IN (:...ids)', { ids: accountIds })
+        .andWhere('t.date >= :dateFrom', { dateFrom: range.dateFrom })
+        .andWhere('t.date <= :dateTo', { dateTo: range.dateTo })
+        .andWhere('t.amount_minor < 0')
+        .andWhere('t.deleted_at IS NULL')
+        .groupBy('t.category_id')
+        .addGroupBy('c.name')
+        .addGroupBy('c.color')
+        .addGroupBy('c.icon')
+        .orderBy('expense', 'DESC')
+        .getRawMany<{ categoryId: string; name: string; color: string | null; icon: string | null; expense: string }>(),
+      this.transactionRepo
+        .createQueryBuilder('t')
+        .select('SUBSTRING(t.date::text FROM 1 FOR 7)', 'month')
+        .addSelect('SUM(CASE WHEN t.amount_minor > 0 THEN t.amount_minor ELSE 0 END)', 'income')
+        .addSelect('SUM(CASE WHEN t.amount_minor < 0 THEN ABS(t.amount_minor) ELSE 0 END)', 'expense')
+        .where('t.account_id IN (:...ids)', { ids: accountIds })
+        .andWhere('t.date >= :trendFrom', { trendFrom })
+        .andWhere('t.date <= :trendTo', { trendTo })
+        .andWhere('t.deleted_at IS NULL')
+        .groupBy('SUBSTRING(t.date::text FROM 1 FOR 7)')
+        .orderBy('month', 'ASC')
+        .getRawMany<{ month: string; income: string; expense: string }>(),
+    ]);
+
+    const categoryTotal = categoryRows.reduce((sum, row) => sum + (Number(row.expense) || 0), 0);
+
+    return {
+      period: range,
+      currency,
+      expense_by_day: dailyRows.map((row) => {
+        const amountMinor = Number(row.expense) || 0;
+        return {
+          date: row.date,
+          amount: toMoneyDto(amountMinor, currency),
+          amount_minor: amountMinor,
+        };
+      }),
+      expense_by_category: categoryRows.map((row) => {
+        const amountMinor = Number(row.expense) || 0;
+        return {
+          categoryId: row.categoryId,
+          name: row.name,
+          color: row.color ?? null,
+          icon: row.icon ?? null,
+          amount: toMoneyDto(amountMinor, currency),
+          amount_minor: amountMinor,
+          share_pct: categoryTotal > 0 ? Math.round((amountMinor / categoryTotal) * 100) : 0,
+        };
+      }),
+      cashflow_by_month: monthlyRows.map((row) => {
+        const incomeMinor = Number(row.income) || 0;
+        const expenseMinor = Number(row.expense) || 0;
+        const netMinor = incomeMinor - expenseMinor;
+        return {
+          month: row.month,
+          income: toMoneyDto(incomeMinor, currency),
+          income_minor: incomeMinor,
+          expense: toMoneyDto(expenseMinor, currency),
+          expense_minor: expenseMinor,
+          net: toMoneyDto(netMinor, currency),
+          net_minor: netMinor,
+        };
+      }),
     };
   }
 
@@ -221,8 +353,18 @@ export class DashboardService {
     });
   }
 
-  async createSalarySchedule(userId: string, dayOfMonth: number, label?: string | null) {
-    const schedule = this.salaryRepo.create({ userId, dayOfMonth, label: label ?? null });
+  async createSalarySchedule(
+    userId: string,
+    dayOfMonth: number,
+    label?: string | null,
+    amountMinor?: number | null,
+  ) {
+    const schedule = this.salaryRepo.create({
+      userId,
+      dayOfMonth,
+      label: label ?? null,
+      amountMinor: amountMinor ?? null,
+    });
     return this.salaryRepo.save(schedule);
   }
 

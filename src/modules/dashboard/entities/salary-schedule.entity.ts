@@ -27,6 +27,10 @@ export class SalarySchedule {
   @Column({ type: 'varchar', length: 100, nullable: true })
   label: string | null;
 
+  /** Expected salary amount in minor units (optional). */
+  @Column({ name: 'amount_minor', type: 'integer', nullable: true })
+  amountMinor: number | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 }

@@ -11,4 +11,10 @@ export class CreateSalaryScheduleDto {
   @IsOptional()
   @IsString()
   label?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Type(() => Number)
+  amountMinor?: number | null;
 }

@@ -18,6 +18,20 @@ function subscriptionSeverity(nextPaymentDate: string): 'good' | 'attention' | '
   return 'good';
 }
 
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function isOnOrBeforeToday(dateStr: string): boolean {
+  const d = new Date(dateStr);
+  const today = new Date();
+  d.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return d.getTime() <= today.getTime();
+}
+
 @Injectable()
 export class SubscriptionsService {
   constructor(
@@ -73,6 +87,71 @@ export class SubscriptionsService {
     }
     await this.repo.save(sub);
     return this.toResponse(sub);
+  }
+
+  async remove(id: string, userId: string): Promise<void> {
+    const sub = await this.repo.findOne({ where: { id, userId } });
+    if (!sub) throw new NotFoundException('Subscription not found');
+    await this.repo.remove(sub);
+  }
+
+  async pay(id: string, userId: string) {
+    const sub = await this.repo.findOne({ where: { id, userId }, relations: ['category'] });
+    if (!sub) throw new NotFoundException('Subscription not found');
+
+    // Move to the next unpaid cycle; catch up if user pays late.
+    let next = sub.nextPaymentDate;
+    while (isOnOrBeforeToday(next)) {
+      next = addDays(next, sub.intervalDays);
+    }
+    sub.nextPaymentDate = next;
+    await this.repo.save(sub);
+    return this.toResponse(sub);
+  }
+
+  async summary(userId: string) {
+    const list = await this.repo.find({ where: { userId } });
+    const totalMonthlyMinor = list.reduce((sum, sub) => {
+      const monthlyApprox = Math.round((sub.amountMinor * 30) / Math.max(1, sub.intervalDays));
+      return sum + monthlyApprox;
+    }, 0);
+    const dueSoonCount = list.filter((sub) => subscriptionSeverity(sub.nextPaymentDate) !== 'good').length;
+    const currency = list[0]?.currency ?? 'KZT';
+
+    return {
+      subscriptions_count: list.length,
+      due_soon_count: dueSoonCount,
+      estimated_monthly_total: toMoneyDto(totalMonthlyMinor, currency),
+      estimated_monthly_total_minor: totalMonthlyMinor,
+      currency,
+    };
+  }
+
+  async reminders(userId: string, daysAhead: number = 14) {
+    const list = await this.repo.find({
+      where: { userId },
+      relations: ['category'],
+      order: { nextPaymentDate: 'ASC' },
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const maxDays = Number.isInteger(daysAhead) ? Math.max(1, Math.min(90, daysAhead)) : 14;
+
+    const items = list
+      .map((sub) => {
+        const next = new Date(sub.nextPaymentDate);
+        next.setHours(0, 0, 0, 0);
+        const daysLeft = Math.ceil((next.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+        return { sub, daysLeft };
+      })
+      .filter((x) => x.daysLeft <= maxDays)
+      .map(({ sub, daysLeft }) => ({
+        ...this.toResponse(sub),
+        days_until_payment: daysLeft,
+      }));
+
+    return { items, daysAhead: maxDays };
   }
 
   private toResponse(s: Subscription) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
@@ -15,6 +15,15 @@ export class HouseholdController {
   @Get()
   getHousehold(@CurrentUser() user: User) {
     return this.householdService.getHousehold(user.id);
+  }
+
+  @Get('overview')
+  getOverview(
+    @CurrentUser() user: User,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    return this.householdService.getOverview(user.id, dateFrom, dateTo);
   }
 
   @Post()
@@ -34,5 +43,17 @@ export class HouseholdController {
     @CurrentUser() user: User,
   ) {
     return this.householdService.updateMemberRole(user.id, id, dto);
+  }
+
+  @Delete('members/:id')
+  async removeMember(@Param('id') id: string, @CurrentUser() user: User) {
+    await this.householdService.removeMember(user.id, id);
+    return { success: true };
+  }
+
+  @Post('leave')
+  async leave(@CurrentUser() user: User) {
+    await this.householdService.leave(user.id);
+    return { success: true };
   }
 }
