@@ -142,6 +142,7 @@ export class AuthService {
       httpOnly: boolean;
       secure: boolean;
       sameSite: 'lax' | 'strict' | 'none';
+      domain?: string;
       path: string;
       maxAge: number;
     };
@@ -153,12 +154,17 @@ export class AuthService {
 
   async clearRefreshCookie(res: Response): Promise<void> {
     const cookieName = this.config.getOrThrow<string>('auth.cookie.refreshName');
-    const opts = this.config.get('auth.cookie.options') as { secure?: boolean; sameSite?: 'lax' | 'strict' | 'none' };
+    const opts = this.config.get('auth.cookie.options') as {
+      secure?: boolean;
+      sameSite?: 'lax' | 'strict' | 'none';
+      domain?: string;
+    };
     res.clearCookie(cookieName, {
       path: '/',
       httpOnly: true,
       secure: opts?.secure ?? false,
       sameSite: opts?.sameSite ?? 'lax',
+      domain: opts?.domain,
     });
   }
 

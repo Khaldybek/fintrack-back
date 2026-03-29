@@ -13,10 +13,12 @@ export default registerAs('auth', () => ({
       const sameSite = (process.env.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none') ?? 'lax';
       // sameSite=none требует Secure=true (cross-site context)
       const secure = sameSite === 'none' || process.env.NODE_ENV === 'production';
+      const domain = process.env.COOKIE_DOMAIN?.trim() || undefined;
       return {
         httpOnly: true,
         secure,
         sameSite,
+        domain,
         path: '/',
         maxAge: 7 * 24 * 60 * 60 * 1000,
       };
