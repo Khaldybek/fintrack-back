@@ -5,11 +5,11 @@ import { Account } from '../accounts/entities/account.entity';
 import { Transaction } from '../transactions/entities/transaction.entity';
 import { SalarySchedule } from './entities/salary-schedule.entity';
 import { AiService } from '../ai/ai.service';
+import { AiCacheService } from '../ai/ai-cache.service';
+import { AI_CACHE_FEATURE } from '../ai/ai-cache.constants';
 import { toMoneyDto } from '../../common/money.util';
 import { getTodayInTimezone } from '../../common/date.util';
 import type { User } from '../users/entities/user.entity';
-
-const INSIGHT_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 const DEFAULT_CURRENCY = 'KZT';
 const LOW_BALANCE_THRESHOLD_MINOR = 50_000; // 500 KZT if 1 unit = 1 tenge
@@ -35,12 +35,17 @@ function getCurrentMonthRange(timezone: string): { dateFrom: string; dateTo: str
   return { dateFrom, dateTo };
 }
 
-type InsightCacheEntry = { text: string; severity: 'good' | 'attention' | 'risk'; status: string; expiresAt: number };
+/** Subset of getSummary() used by forecast / insight */
+type SummaryForForecast = {
+  balance_total_minor: number;
+  currency: string;
+  month: { dateFrom: string; dateTo: string };
+  income_minor: number;
+  expense_minor: number;
+};
 
 @Injectable()
 export class DashboardService {
-  private readonly insightCache = new Map<string, InsightCacheEntry>();
-
   constructor(
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
@@ -49,6 +54,7 @@ export class DashboardService {
     @InjectRepository(SalarySchedule)
     private readonly salaryRepo: Repository<SalarySchedule>,
     private readonly aiService: AiService,
+    private readonly aiCacheService: AiCacheService,
   ) {}
 
   async getSummary(user: User) {
@@ -226,8 +232,8 @@ export class DashboardService {
     };
   }
 
-  async getForecast(user: User) {
-    const summary = await this.getSummary(user);
+  /** Core forecast numbers + template explanation (no OpenAI). */
+  private buildForecastFromSummary(summary: SummaryForForecast) {
     const balance = summary.balance_total_minor;
     const { dateTo } = summary.month;
     const today = new Date().toISOString().slice(0, 10);
@@ -248,28 +254,64 @@ export class DashboardService {
           ? 'Конец месяца.'
           : `Прогноз на конец месяца: ${toMoneyDto(projectedBalanceMinor, summary.currency).formatted}.`;
 
-    let explanationAi: string | null = null;
-    if (this.aiService.isEnabled()) {
-      explanationAi =
-        (await this.aiService.explainForecast({
-          balance_minor: balance,
-          projected_balance_minor: projectedBalanceMinor,
-          status: status as 'stable' | 'attention' | 'risk',
-          days_left: daysLeft,
-          currency: summary.currency,
-        })) ?? null;
-    }
-
     return {
-      balance: toMoneyDto(balance, summary.currency),
-      projected_balance: toMoneyDto(projectedBalanceMinor, summary.currency),
-      projected_balance_minor: projectedBalanceMinor,
-      date_to: dateTo,
-      days_left: daysLeft,
+      balance,
+      projectedBalanceMinor,
+      dateTo,
+      daysLeft,
       status,
       severity,
       explanation,
-      explanationAi: explanationAi ?? undefined,
+      currency: summary.currency,
+    };
+  }
+
+  async getForecast(user: User, includeAi: boolean = false) {
+    const summary = await this.getSummary(user);
+    const core = this.buildForecastFromSummary(summary);
+
+    let explanationAi: string | undefined;
+    if (includeAi && this.aiService.isEnabled()) {
+      const periodKey = getTodayInTimezone(user.timezone ?? 'UTC');
+      const fingerprint = {
+        balance_minor: core.balance,
+        projected_balance_minor: core.projectedBalanceMinor,
+        status: core.status,
+        days_left: core.daysLeft,
+        currency: core.currency,
+        month_date_from: summary.month.dateFrom,
+        month_date_to: summary.month.dateTo,
+        expense_minor: summary.expense_minor,
+      };
+      const payload = await this.aiCacheService.getOrSetPayload<{ text: string }>(
+        user.id,
+        AI_CACHE_FEATURE.FORECAST_EXPLANATION,
+        periodKey,
+        fingerprint,
+        async () => {
+          const text = await this.aiService.explainForecast({
+            balance_minor: core.balance,
+            projected_balance_minor: core.projectedBalanceMinor,
+            status: core.status as 'stable' | 'attention' | 'risk',
+            days_left: core.daysLeft,
+            currency: core.currency,
+          });
+          return text ? { text } : null;
+        },
+      );
+      if (payload?.text) explanationAi = payload.text;
+    }
+
+    return {
+      balance: toMoneyDto(core.balance, core.currency),
+      projected_balance: toMoneyDto(core.projectedBalanceMinor, core.currency),
+      projected_balance_minor: core.projectedBalanceMinor,
+      date_to: core.dateTo,
+      days_left: core.daysLeft,
+      status: core.status,
+      severity: core.severity,
+      explanation: core.explanation,
+      explanationAi,
       timezone_hint: user.timezone,
     };
   }
@@ -375,53 +417,49 @@ export class DashboardService {
 
   async getInsight(user: User) {
     const dateStr = getTodayInTimezone(user.timezone ?? 'UTC');
-    const cacheKey = `insight:${user.id}:${dateStr}`;
-    const now = Date.now();
-    const cached = this.insightCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return { text: cached.text, severity: cached.severity, status: cached.status };
-    }
-
     const summary = await this.getSummary(user);
-    const forecast = await this.getForecast(user);
+    const forecast = this.buildForecastFromSummary(summary);
     const severity = forecast.severity as 'good' | 'attention' | 'risk';
     const status = forecast.status;
 
     if (this.aiService.isEnabled()) {
-      const text = await this.aiService.generateInsight({
+      const fingerprint = {
         balance_minor: summary.balance_total_minor,
         income_minor: summary.income_minor,
         expense_minor: summary.expense_minor,
-        projected_balance_minor: forecast.projected_balance_minor,
-        forecast_status: forecast.status as 'stable' | 'attention' | 'risk',
-        days_left_in_month: forecast.days_left,
+        projected_balance_minor: forecast.projectedBalanceMinor,
+        forecast_status: forecast.status,
+        days_left_in_month: forecast.daysLeft,
         currency: summary.currency,
-      });
-      if (text) {
-        const entry: InsightCacheEntry = {
-          text,
-          severity,
-          status,
-          expiresAt: now + INSIGHT_CACHE_TTL_MS,
-        };
-        this.insightCache.set(cacheKey, entry);
-        this.pruneInsightCache();
-        return { text, severity, status };
-      }
+        month_date_from: summary.month.dateFrom,
+        month_date_to: summary.month.dateTo,
+      };
+      const payload = await this.aiCacheService.getOrSetPayload<{ text: string }>(
+        user.id,
+        AI_CACHE_FEATURE.DASHBOARD_INSIGHT,
+        dateStr,
+        fingerprint,
+        async () => {
+          const text = await this.aiService.generateInsight({
+            balance_minor: summary.balance_total_minor,
+            income_minor: summary.income_minor,
+            expense_minor: summary.expense_minor,
+            projected_balance_minor: forecast.projectedBalanceMinor,
+            forecast_status: forecast.status as 'stable' | 'attention' | 'risk',
+            days_left_in_month: forecast.daysLeft,
+            currency: summary.currency,
+          });
+          return text ? { text } : null;
+        },
+      );
+      if (payload?.text) return { text: payload.text, severity, status };
     }
 
     const fallbackText =
-      forecast.projected_balance_minor < 0
+      forecast.projectedBalanceMinor < 0
         ? 'Прогноз: к концу месяца баланс может уйти в минус. Рекомендуем сократить расходы или пополнить счёт.'
         : 'Проверьте остаток до конца месяца — прогноз в разделе «Прогноз».';
     return { text: fallbackText, severity, status };
-  }
-
-  private pruneInsightCache(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.insightCache.entries()) {
-      if (entry.expiresAt <= now) this.insightCache.delete(key);
-    }
   }
 
   /** Финансовый индекс 0–100, status, factors (Pro-фича) */

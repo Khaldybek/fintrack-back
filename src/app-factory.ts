@@ -7,6 +7,7 @@ import { join } from 'path';
 import { AppModule } from './app.module';
 import { runGoalsBigintMigration } from './database/run-goals-bigint-migration';
 import { runSalarySchedulesAmountMigration } from './database/run-salary-schedules-amount-migration';
+import { runAiContentCacheMigration } from './database/run-ai-content-cache-migration';
 
 function loadEnv(): void {
   const path = join(process.cwd(), '.env');
@@ -31,6 +32,11 @@ export async function createApp(): Promise<INestApplication> {
   }
   try {
     await runSalarySchedulesAmountMigration();
+  } catch {
+    // migration optional (e.g. first run, or serverless cold start)
+  }
+  try {
+    await runAiContentCacheMigration();
   } catch {
     // migration optional (e.g. first run, or serverless cold start)
   }

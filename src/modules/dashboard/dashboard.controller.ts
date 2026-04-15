@@ -16,8 +16,9 @@ export class DashboardController {
   }
 
   @Get('forecast')
-  getForecast(@CurrentUser() user: User) {
-    return this.dashboardService.getForecast(user);
+  getForecast(@CurrentUser() user: User, @Query('includeAi') includeAi?: string) {
+    const flag = includeAi === '1' || includeAi === 'true' || includeAi === 'yes';
+    return this.dashboardService.getForecast(user, flag);
   }
 
   @Get('alerts')
