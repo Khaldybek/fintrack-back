@@ -85,13 +85,15 @@ export class AuthController {
       result.refreshToken,
       result.refreshExpiresAt,
     );
-    const frontendUrl = this.config.getOrThrow<string>('auth.frontendUrl');
+    const frontendBase = this.config.getOrThrow<string>('auth.frontendUrl').replace(/\/$/, '');
+    const oauthPath = this.config.getOrThrow<string>('auth.frontendOAuthCallbackPath');
+    const pathSeg = oauthPath.startsWith('/') ? oauthPath : `/${oauthPath}`;
     const hash = new URLSearchParams({
       access_token: result.tokenPair.accessToken,
       expires_in: result.tokenPair.accessExpiresIn,
       user: JSON.stringify(result.tokenPair.user),
     }).toString();
-    res.redirect(`${frontendUrl}#${hash}`);
+    res.redirect(`${frontendBase}${pathSeg}#${hash}`);
   }
 
   @Post('refresh')

@@ -69,11 +69,19 @@ export async function createApp(): Promise<INestApplication> {
       if (o && !allowedOrigins.includes(o)) allowedOrigins.push(o);
     });
   }
+  const isProd = process.env.NODE_ENV === 'production';
   app.enableCors({
-    origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+    origin: (requestOrigin: string | undefined, cb) => {
+      if (!requestOrigin) {
+        cb(null, !isProd);
+        return;
+      }
+      cb(null, allowedOrigins.includes(requestOrigin));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+    optionsSuccessStatus: 204,
   });
   // Required for serverless handlers that do not call app.listen().
   await app.init();

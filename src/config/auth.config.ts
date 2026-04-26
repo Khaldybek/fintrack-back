@@ -10,8 +10,12 @@ export default registerAs('auth', () => ({
   cookie: {
     refreshName: process.env.REFRESH_COOKIE_NAME ?? 'fintrack_refresh',
     options: (() => {
-      const sameSite = (process.env.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none') ?? 'lax';
-      // sameSite=none требует Secure=true (cross-site context)
+      const crossSite =
+        process.env.COOKIE_CROSS_SITE === '1' ||
+        process.env.COOKIE_CROSS_SITE === 'true';
+      let sameSite = (process.env.COOKIE_SAME_SITE as 'lax' | 'strict' | 'none') ?? 'lax';
+      if (crossSite) sameSite = 'none';
+      // sameSite=none требует Secure=true (браузер)
       const secure = sameSite === 'none' || process.env.NODE_ENV === 'production';
       const domain = process.env.COOKIE_DOMAIN?.trim() || undefined;
       return {
@@ -33,6 +37,10 @@ export default registerAs('auth', () => ({
     ),
   },
   frontendUrl: (process.env.FRONTEND_URL ?? 'http://localhost:3001').trim(),
+  /** Путь на фронте для редиректа после Google (без домена). */
+  frontendOAuthCallbackPath: (
+    process.env.FRONTEND_OAUTH_CALLBACK_PATH?.trim() || '/auth/callback'
+  ),
   smtp: {
     host: process.env.SMTP_HOST ?? '',
     port: parseInt(process.env.SMTP_PORT ?? '587', 10),
