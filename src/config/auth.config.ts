@@ -25,11 +25,14 @@ export default registerAs('auth', () => ({
     })(),
   },
   google: {
-    clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-    callbackUrl: process.env.GOOGLE_CALLBACK_URL ?? 'http://localhost:3000/v1/auth/google/callback',
+    clientId: (process.env.GOOGLE_CLIENT_ID ?? '').trim(),
+    clientSecret: (process.env.GOOGLE_CLIENT_SECRET ?? '').trim(),
+    callbackUrl: (
+      process.env.GOOGLE_CALLBACK_URL?.trim() ||
+      'http://localhost:3000/v1/auth/google/callback'
+    ),
   },
-  frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:3001',
+  frontendUrl: (process.env.FRONTEND_URL ?? 'http://localhost:3001').trim(),
   smtp: {
     host: process.env.SMTP_HOST ?? '',
     port: parseInt(process.env.SMTP_PORT ?? '587', 10),

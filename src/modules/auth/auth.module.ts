@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -12,6 +14,27 @@ import { MeController } from './me.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { GoogleStrategy } from './strategies/google.strategy';
+
+/** @Module() runs at import time — load .env into process.env before checking Google vars. */
+function loadDotEnvIfNeeded(): void {
+  const path = join(process.cwd(), '.env');
+  if (!existsSync(path)) return;
+  const content = readFileSync(path, 'utf8');
+  for (const line of content.split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (m && process.env[m[1]] === undefined) {
+      process.env[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
+    }
+  }
+}
+loadDotEnvIfNeeded();
+
+/** Passport GoogleStrategy crashes if clientID is empty — skip when OAuth not configured. */
+function isGoogleOAuthConfigured(): boolean {
+  const id = process.env.GOOGLE_CLIENT_ID?.trim();
+  const secret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  return Boolean(id && secret);
+}
 
 @Module({
   imports: [
@@ -34,7 +57,7 @@ import { GoogleStrategy } from './strategies/google.strategy';
     TypeOrmModule.forFeature([RefreshToken, PasswordResetToken]),
   ],
   controllers: [AuthController, MeController],
-  providers: [AuthService, JwtStrategy, GoogleStrategy],
+  providers: [AuthService, JwtStrategy, ...(isGoogleOAuthConfigured() ? [GoogleStrategy] : [])],
   exports: [AuthService],
 })
 export class AuthModule {}
