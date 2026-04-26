@@ -8,17 +8,17 @@ import {
   getForecastExplanationMessages,
   type ForecastExplanationContext,
 } from './prompts/forecast-explanation.prompt';
-import { VOICE_PARSE_RESPONSE_SCHEMA, type VoiceParseRawResult } from './schemas/voice-parse.schema';
+import { getVoiceParseResponseSchema, type VoiceParseRawResult } from './schemas/voice-parse.schema';
 import {
   SUGGEST_CATEGORY_RESPONSE_SCHEMA,
   type SuggestCategoryRawResult,
 } from './schemas/suggest-category.schema';
-import { RECEIPT_EXTRACT_RESPONSE_SCHEMA, type ReceiptExtractRawResult } from './schemas/receipt-extract.schema';
+import { getReceiptExtractResponseSchema, type ReceiptExtractRawResult } from './schemas/receipt-extract.schema';
 import {
   MONTHLY_SUMMARY_RESPONSE_SCHEMA,
   type MonthlySummaryRawResult,
 } from './schemas/monthly-summary.schema';
-import { RECEIPT_EXTRACT_SYSTEM } from './prompts/receipt-extract.prompt';
+import { getReceiptExtractSystem } from './prompts/receipt-extract.prompt';
 import {
   getMonthlySummaryMessages,
   getMonthNameRu,
@@ -93,19 +93,26 @@ export class AiService {
    */
   async parseTransactionFromText(
     text: string,
-    context: { referenceDate: string; categoryNames: string[]; accountNames: string[] },
+    context: {
+      referenceDate: string;
+      categoryNames: string[];
+      accountNames: string[];
+      currency: string;
+    },
   ): Promise<VoiceParseRawResult | null> {
+    const currency = context.currency?.trim() || 'KZT';
     const messages = getVoiceParseMessages(
       text.trim(),
       context.referenceDate,
       context.categoryNames,
       context.accountNames,
+      currency,
     );
     const completion = await this.chat({
       messages,
       responseFormat: {
         type: 'json_schema',
-        json_schema: VOICE_PARSE_RESPONSE_SCHEMA,
+        json_schema: getVoiceParseResponseSchema(currency),
       },
       maxTokens: 200,
       temperature: 0.1,
@@ -183,14 +190,19 @@ export class AiService {
    * Extract amount, date, memo from receipt image (Vision).
    * Returns null if AI disabled or error.
    */
-  async extractReceipt(imageBase64: string, mime: string): Promise<ReceiptExtractRawResult | null> {
+  async extractReceipt(
+    imageBase64: string,
+    mime: string,
+    currency = 'KZT',
+  ): Promise<ReceiptExtractRawResult | null> {
     if (!this.client || !imageBase64) return null;
+    const cur = currency?.trim() || 'KZT';
     const dataUrl = `data:${mime};base64,${imageBase64}`;
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
       {
         role: 'user',
         content: [
-          { type: 'text', text: RECEIPT_EXTRACT_SYSTEM },
+          { type: 'text', text: getReceiptExtractSystem(cur) },
           { type: 'image_url', image_url: { url: dataUrl } },
         ],
       },
@@ -199,7 +211,7 @@ export class AiService {
       messages,
       responseFormat: {
         type: 'json_schema',
-        json_schema: RECEIPT_EXTRACT_RESPONSE_SCHEMA,
+        json_schema: getReceiptExtractResponseSchema(cur),
       },
       maxTokens: 200,
       temperature: 0.1,

@@ -12,7 +12,7 @@ import { QueryTransactionsDto } from './dto/query-transactions.dto';
 import { AccountsService } from '../accounts/accounts.service';
 import { CategoriesService } from '../categories/categories.service';
 import { AiService } from '../ai/ai.service';
-import { toMoneyDto } from '../../common/money.util';
+import { majorAmountToSignedMinor, toMoneyDto } from '../../common/money.util';
 import { getTodayInTimezone } from '../../common/date.util';
 import { CreateTransactionTemplateDto } from './dto/create-template.dto';
 import type { SuggestCategoryDto } from './dto/suggest-category.dto';
@@ -166,16 +166,22 @@ export class TransactionsService {
   async voiceParse(userId: string, text: string, timezone: string): Promise<VoiceParseResult> {
     const trimmed = (text || '').trim();
     const referenceDate = getTodayInTimezone(timezone || 'UTC');
+    const accountsList = (await this.accountsService.findAllByUser(userId)) as Array<{
+      id: string;
+      name: string;
+      currency?: string;
+    }>;
+    const currency = (accountsList[0]?.currency ?? 'KZT').trim() || 'KZT';
 
     if (this.aiService.isEnabled() && trimmed.length > 0) {
       const categories = await this.categoriesService.findAllByUser(userId);
-      const accountsList = (await this.accountsService.findAllByUser(userId)) as Array<{ id: string; name: string }>;
       const categoryNames = categories.map((c) => c.name);
       const accountNames = accountsList.map((a) => a.name);
       const raw = await this.aiService.parseTransactionFromText(trimmed, {
         referenceDate,
         categoryNames,
         accountNames,
+        currency,
       });
       if (raw) {
         const categoryId =
@@ -201,7 +207,7 @@ export class TransactionsService {
     let amountMinor = 0;
     if (match) {
       const num = parseFloat(match[1].replace(',', '.'));
-      amountMinor = -Math.round(num * 100);
+      amountMinor = majorAmountToSignedMinor(-num, currency);
     }
     return {
       amountMinor,
@@ -310,8 +316,11 @@ export class TransactionsService {
       }
     }
     const base64 = buffer.toString('base64');
+    const accountsForCurrency = (await this.accountsService.findAllByUser(userId)) as Array<{ currency?: string }>;
+    const receiptCurrency = (accountsForCurrency[0]?.currency ?? 'KZT').trim() || 'KZT';
     const raw =
-      this.aiService.isEnabled() && (await this.aiService.extractReceipt(base64, mime || 'image/jpeg'));
+      this.aiService.isEnabled() &&
+      (await this.aiService.extractReceipt(base64, mime || 'image/jpeg', receiptCurrency));
     if (!raw) return empty;
 
     const memo = raw.memo?.trim() || null;

@@ -1,6 +1,6 @@
-/** Minor units per unit (e.g. 100 for KZT/RUB, 100 for USD cents) */
+/** Minor units per major unit (KZT: 1 — храним целые тенге; USD/EUR: центы). */
 const MINOR_PER_UNIT: Record<string, number> = {
-  KZT: 1,   // KZT: 1 tiyn = 1/100 tenge, but often stored as integer tenge
+  KZT: 1,
   RUB: 100,
   USD: 100,
   EUR: 100,
@@ -8,12 +8,17 @@ const MINOR_PER_UNIT: Record<string, number> = {
 
 const DEFAULT_MINOR = 100;
 
+/** Сколько минорных единиц в одной «основной» единице валюты (для парсинга / отображения). */
+export function getMinorPerUnit(currency: string): number {
+  return MINOR_PER_UNIT[currency] ?? DEFAULT_MINOR;
+}
+
 /**
  * Format amount_minor for API response (spec: amount_minor, currency, formatted).
  * KZT: no decimals in practice, space as thousand sep.
  */
 export function formatMoney(amountMinor: number, currency: string): string {
-  const minorPerUnit = MINOR_PER_UNIT[currency] ?? DEFAULT_MINOR;
+  const minorPerUnit = getMinorPerUnit(currency);
   const value = amountMinor / minorPerUnit;
   const hasDecimals = (minorPerUnit > 1 && amountMinor % minorPerUnit !== 0) || minorPerUnit === 1;
   const formatted = hasDecimals
@@ -29,4 +34,13 @@ export function toMoneyDto(amountMinor: number, currency: string) {
     currency,
     formatted: formatMoney(amountMinor, currency),
   };
+}
+
+/** Сумма в «основных» единицах (как в фразе пользователя) → signed amount_minor. */
+export function majorAmountToSignedMinor(
+  signedMajor: number,
+  currency: string,
+): number {
+  const per = getMinorPerUnit(currency);
+  return Math.round(signedMajor * per);
 }
