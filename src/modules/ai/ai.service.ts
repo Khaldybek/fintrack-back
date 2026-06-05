@@ -24,6 +24,28 @@ import {
   getMonthNameRu,
   type MonthlySummaryContext,
 } from './prompts/monthly-summary.prompt';
+import { getStatementDetectMessages } from './prompts/statement-detect.prompt';
+import { getStatementParseMessages } from './prompts/statement-parse.prompt';
+import {
+  STATEMENT_DETECT_RESPONSE_SCHEMA,
+  type StatementDetectRawResult,
+} from './schemas/statement-detect.schema';
+import {
+  getStatementParseResponseSchema,
+  type StatementParseRawResult,
+} from './schemas/statement-parse.schema';
+import type { BankCode, ColumnMap } from '../../common/statement-parser.types';
+
+function aiColumnMapToInternal(map: StatementDetectRawResult): ColumnMap {
+  return {
+    headerRowIndex: map.header_row_index,
+    date: map.date_column,
+    amount: map.amount_column ?? undefined,
+    debit: map.debit_column ?? undefined,
+    credit: map.credit_column ?? undefined,
+    memo: map.memo_column,
+  };
+}
 
 @Injectable()
 export class AiService {
@@ -231,6 +253,85 @@ export class AiService {
    * Generate monthly report summary and share-ready text.
    * Returns null if AI disabled or error.
    */
+  /**
+   * Detect bank and column mapping from tabular statement sample.
+   */
+  async detectStatementStructure(
+    sampleText: string,
+  ): Promise<{ bankCode: BankCode; confidence: number; columnMap: ColumnMap } | null> {
+    if (!sampleText.trim()) return null;
+    const completion = await this.chat({
+      messages: getStatementDetectMessages(sampleText),
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: STATEMENT_DETECT_RESPONSE_SCHEMA,
+      },
+      maxTokens: 300,
+      temperature: 0,
+    });
+    if (!completion?.choices?.[0]?.message?.content) return null;
+    try {
+      const parsed = JSON.parse(
+        completion.choices[0].message.content,
+      ) as StatementDetectRawResult;
+      if (typeof parsed.confidence !== 'number') return null;
+      const bankCode = ['kaspi', 'halyk', 'generic'].includes(parsed.bank_code)
+        ? parsed.bank_code
+        : 'generic';
+      return {
+        bankCode,
+        confidence: Math.min(1, Math.max(0, parsed.confidence)),
+        columnMap: aiColumnMapToInternal(parsed),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Extract transactions from unstructured statement text (PDF chunks, fallback).
+   */
+  async parseStatementFromText(
+    text: string,
+    currency: string,
+  ): Promise<Array<{ date: string; amountMinor: number; memo: string }>> {
+    if (!text.trim()) return [];
+    const cur = currency?.trim() || 'KZT';
+    const completion = await this.chat({
+      messages: getStatementParseMessages(text, cur),
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: getStatementParseResponseSchema(cur),
+      },
+      maxTokens: 4000,
+      temperature: 0.1,
+    });
+    if (!completion?.choices?.[0]?.message?.content) return [];
+    try {
+      const parsed = JSON.parse(
+        completion.choices[0].message.content,
+      ) as StatementParseRawResult;
+      if (!Array.isArray(parsed.transactions)) return [];
+      return parsed.transactions
+        .filter(
+          (t) =>
+            typeof t.amount_minor === 'number' &&
+            t.amount_minor !== 0 &&
+            typeof t.date === 'string' &&
+            /^\d{4}-\d{2}-\d{2}$/.test(t.date) &&
+            typeof t.memo === 'string' &&
+            t.memo.trim().length > 0,
+        )
+        .map((t) => ({
+          date: t.date,
+          amountMinor: t.amount_minor,
+          memo: t.memo.trim(),
+        }));
+    } catch {
+      return [];
+    }
+  }
+
   async generateMonthlySummary(
     context: MonthlySummaryContext,
   ): Promise<{ summaryText: string; shareReadyText: string } | null> {

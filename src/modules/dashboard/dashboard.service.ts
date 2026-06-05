@@ -10,6 +10,7 @@ import { AI_CACHE_FEATURE } from '../ai/ai-cache.constants';
 import { toMoneyDto } from '../../common/money.util';
 import { getTodayInTimezone } from '../../common/date.util';
 import type { User } from '../users/entities/user.entity';
+import { PlanService } from '../billing/plan.service';
 
 const DEFAULT_CURRENCY = 'KZT';
 const LOW_BALANCE_THRESHOLD_MINOR = 50_000; // 500 KZT if 1 unit = 1 tenge
@@ -55,6 +56,7 @@ export class DashboardService {
     private readonly salaryRepo: Repository<SalarySchedule>,
     private readonly aiService: AiService,
     private readonly aiCacheService: AiCacheService,
+    private readonly planService: PlanService,
   ) {}
 
   async getSummary(user: User) {
@@ -469,6 +471,12 @@ export class DashboardService {
     factors_positive: Array<{ label: string; score: number }>;
     factors_negative: Array<{ label: string; score: number }>;
   }> {
+    await this.planService.assertFeature(
+      user.id,
+      'dashboardIndex',
+      'dashboard_index',
+      'Upgrade to Pro to access the financial health index.',
+    );
     const summary = await this.getSummary(user);
     const balance = summary.balance_total_minor;
     const income = summary.income_minor;

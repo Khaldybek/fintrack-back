@@ -4,11 +4,15 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 import { UpdateMeDto } from './dto/update-me.dto';
+import { PlanService } from '../billing/plan.service';
 
 @Controller('me')
 @UseGuards(JwtAuthGuard)
 export class MeController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly planService: PlanService,
+  ) {}
 
   @Get()
   getMe(@CurrentUser() user: User) {
@@ -41,11 +45,7 @@ export class MeController {
   }
 
   @Get('plan')
-  getPlan(@CurrentUser() _user: User) {
-    return {
-      plan: 'free',
-      limits: { accounts: 3, budgets: 1, goals: 1 },
-      features: { dashboardIndex: false, forecast: true, familyMode: false },
-    };
+  getPlan(@CurrentUser() user: User) {
+    return this.planService.getPlanResponse(user.id);
   }
 }

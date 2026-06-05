@@ -1,19 +1,18 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Account } from './entities/account.entity';
 import { CreateAccountDto } from './dto/create-account.dto';
 import { UpdateAccountDto } from './dto/update-account.dto';
 import { toMoneyDto } from '../../common/money.util';
-import { FeatureGatedException } from '../../common/errors/feature-gated.exception';
-
-const FREE_ACCOUNT_LIMIT = 2;
+import { PlanService } from '../billing/plan.service';
 
 @Injectable()
 export class AccountsService {
   constructor(
     @InjectRepository(Account)
     private readonly repo: Repository<Account>,
+    private readonly planService: PlanService,
   ) {}
 
   async countByUser(userId: string): Promise<number> {
@@ -41,17 +40,12 @@ export class AccountsService {
 
   async create(userId: string, dto: CreateAccountDto) {
     const count = await this.countByUser(userId);
-    if (count >= FREE_ACCOUNT_LIMIT) {
-      throw new FeatureGatedException(
-        'accounts_limit',
-        'Upgrade to Pro to add more than 3 accounts.',
-      );
-    }
+    await this.planService.assertWithinLimit(userId, 'accounts', count);
     const account = this.repo.create({
       userId,
       name: dto.name,
       currency: dto.currency ?? 'KZT',
-      balanceMinor: 0,
+      balanceMinor: dto.balanceMinor ?? 0,
     });
     const saved = await this.repo.save(account);
     return this.toResponse(saved);

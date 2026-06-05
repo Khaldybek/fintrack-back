@@ -1,4 +1,4 @@
-import { IsString, IsOptional, Length, Matches } from 'class-validator';
+import { IsInt, IsOptional, IsString, Length, Matches } from 'class-validator';
 
 export class CreateAccountDto {
   @IsString()
@@ -10,4 +10,9 @@ export class CreateAccountDto {
   @Length(3, 3)
   @Matches(/^[A-Z]{3}$/, { message: 'Currency must be a 3-letter code (e.g. KZT)' })
   currency?: string;
+
+  /** Начальный баланс в amount_minor (KZT: целые тенге). По умолчанию 0. */
+  @IsOptional()
+  @IsInt()
+  balanceMinor?: number;
 }

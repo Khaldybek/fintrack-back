@@ -8,9 +8,7 @@ import { UpdateGoalDto } from './dto/update-goal.dto';
 import { AddGoalEntryDto } from './dto/add-goal-entry.dto';
 import { QueryGoalEntriesDto } from './dto/query-goal-entries.dto';
 import { toMoneyDto } from '../../common/money.util';
-import { FeatureGatedException } from '../../common/errors/feature-gated.exception';
-
-const FREE_GOAL_LIMIT = 1;
+import { PlanService } from '../billing/plan.service';
 
 @Injectable()
 export class GoalsService {
@@ -19,6 +17,7 @@ export class GoalsService {
     private readonly repo: Repository<Goal>,
     @InjectRepository(GoalEntry)
     private readonly entryRepo: Repository<GoalEntry>,
+    private readonly planService: PlanService,
   ) {}
 
   async findAllByUser(userId: string) {
@@ -37,12 +36,7 @@ export class GoalsService {
 
   async create(userId: string, dto: CreateGoalDto) {
     const count = await this.repo.count({ where: { userId } });
-    if (count >= FREE_GOAL_LIMIT) {
-      throw new FeatureGatedException(
-        'goals_limit',
-        'Upgrade to Pro to add more than 1 goal.',
-      );
-    }
+    await this.planService.assertWithinLimit(userId, 'goals', count);
     const goal = this.repo.create({
       userId,
       name: dto.name,

@@ -8,10 +8,8 @@ import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
 import { toMoneyDto } from '../../common/money.util';
 import { getCurrentMonthRange } from '../../common/date.util';
-import { FeatureGatedException } from '../../common/errors/feature-gated.exception';
 import { CategoriesService } from '../categories/categories.service';
-
-const FREE_BUDGET_LIMIT = 1;
+import { PlanService } from '../billing/plan.service';
 
 function progressSeverity(percent: number): 'good' | 'attention' | 'risk' {
   if (percent >= 100) return 'risk';
@@ -30,6 +28,7 @@ export class BudgetsService {
     @InjectRepository(Account)
     private readonly accountRepo: Repository<Account>,
     private readonly categoriesService: CategoriesService,
+    private readonly planService: PlanService,
   ) {}
 
   async findAllByUser(userId: string, timezone: string) {
@@ -87,12 +86,7 @@ export class BudgetsService {
   async create(userId: string, dto: CreateBudgetDto, timezone: string) {
     await this.categoriesService.findOne(dto.categoryId, userId);
     const count = await this.repo.count({ where: { userId } });
-    if (count >= FREE_BUDGET_LIMIT) {
-      throw new FeatureGatedException(
-        'budgets_limit',
-        'Upgrade to Pro to add more than 1 budget.',
-      );
-    }
+    await this.planService.assertWithinLimit(userId, 'budgets', count);
     const budget = this.repo.create({
       userId,
       categoryId: dto.categoryId,

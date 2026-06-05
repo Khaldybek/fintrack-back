@@ -21,6 +21,8 @@ import { SubscriptionsModule } from './modules/subscriptions/subscriptions.modul
 import { HouseholdModule } from './modules/household/household.module';
 import { AiModule } from './modules/ai/ai.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { BillingModule } from './modules/billing/billing.module';
+import { StatementImportModule } from './modules/statement-import/statement-import.module';
 
 @Module({
   imports: [
@@ -35,6 +37,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
       useFactory: (configService: ConfigService) =>
         configService.getOrThrow('database'),
     }),
+    BillingModule,
     AuthModule,
     AiModule,
     AccountsModule,
@@ -49,6 +52,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     SubscriptionsModule,
     HouseholdModule,
     NotificationsModule,
+    StatementImportModule,
   ],
   controllers: [AppController, RootController],
   providers: [AppService],

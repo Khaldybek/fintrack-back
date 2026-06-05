@@ -11,6 +11,7 @@ import { Account } from '../accounts/entities/account.entity';
 import { Transaction } from '../transactions/entities/transaction.entity';
 import { toMoneyDto } from '../../common/money.util';
 import { getCurrentMonthRange } from '../../common/date.util';
+import { PlanService } from '../billing/plan.service';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -26,6 +27,7 @@ export class HouseholdService {
     @InjectRepository(Transaction)
     private readonly txRepo: Repository<Transaction>,
     private readonly usersService: UsersService,
+    private readonly planService: PlanService,
   ) {}
 
   private async membershipOrThrow(userId: string): Promise<HouseholdMember> {
@@ -92,6 +94,12 @@ export class HouseholdService {
 
   /** Create household (current user becomes owner) */
   async create(userId: string, dto: CreateHouseholdDto) {
+    await this.planService.assertFeature(
+      userId,
+      'familyMode',
+      'family_mode',
+      'Upgrade to Family plan to create a household.',
+    );
     const existing = await this.getHousehold(userId);
     if (existing) throw new BadRequestException('User already belongs to a household');
     const household = this.householdRepo.create({ name: dto.name, ownerId: userId });
@@ -107,6 +115,12 @@ export class HouseholdService {
 
   /** Invite user by email to current user's household */
   async invite(userId: string, dto: InviteHouseholdDto) {
+    await this.planService.assertFeature(
+      userId,
+      'familyMode',
+      'family_mode',
+      'Upgrade to Family plan to invite household members.',
+    );
     const current = await this.membershipOrThrow(userId);
     if (current.role === 'viewer') {
       throw new BadRequestException('Viewer cannot invite members');
