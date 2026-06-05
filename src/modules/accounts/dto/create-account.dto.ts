@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Length, Matches } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Length, Matches } from 'class-validator';
 
 export class CreateAccountDto {
   @IsString()
@@ -15,4 +15,8 @@ export class CreateAccountDto {
   @IsOptional()
   @IsInt()
   balanceMinor?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  sharedWithHousehold?: boolean;
 }

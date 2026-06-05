@@ -88,6 +88,7 @@ JWT обязателен.
 | name | string | да | Название (1–100 символов) |
 | currency | string | нет | ISO 4217, 3 буквы (`KZT`, `USD`). По умолчанию `KZT` |
 | balanceMinor | number | нет | **Начальный баланс** в `amount_minor`. По умолчанию `0`. Для KZT — целые тенге (50 000 ₸ → `50000`) |
+| sharedWithHousehold | boolean | нет | Поделиться счётом с семьёй (Family + household). По умолчанию `false` |
 
 **Пример:** `{ "name": "Карта", "currency": "KZT", "balanceMinor": 150000 }`
 
@@ -101,6 +102,89 @@ JWT обязателен.
 - **`GET /v1/accounts/:id`** — один счёт
 - **`PATCH /v1/accounts/:id`** — изменить `name` / `currency` (баланс через транзакции, не здесь)
 - **`DELETE /v1/accounts/:id`** — удалить (soft)
+
+---
+
+## Семейный режим (`/v1/household`)
+
+**Только Family** (`family_monthly` / `family_yearly`). На Free/Pro — **403** `FEATURE_GATED` с кодом `family_mode`.
+
+До **5 участников** в одной семье (включая владельца). При превышении — **403** `household_members_limit`.
+
+### UX
+
+1. `GET /me/plan` → `featuresEffective.familyMode === true` (для гейтинга UI)
+2. `POST /household` — создать семью
+3. `POST /household/invite` — приглашение по email (письмо со ссылкой)
+4. Получатель: `/household/accept?token=...` → логин/регистрация с **тем же email** → `POST /household/invites/accept`
+5. В настройках счёта: `sharedWithHousehold: true` — семья видит счёт и транзакции
+6. `GET /household/budgets` — общие бюджеты по категории (имя категории у каждого участника)
+
+### Эндпоинты
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/household` | Семья, участники, pending invites, лимиты |
+| POST | `/household` | Создать `{ "name": "..." }` |
+| POST | `/household/invite` | `{ "email", "role": "owner"\|"member"\|"viewer" }` → pending + email |
+| GET | `/household/invites` | Список pending (owner/member) |
+| DELETE | `/household/invites/:id` | Отменить приглашение |
+| POST | `/household/invites/accept` | `{ "token" }` — JWT, email = invite.email |
+| GET | `/household/invites/preview?token=` | **Без JWT** — preview для страницы accept |
+| PATCH | `/household/members/:id` | `{ "role" }` — только owner |
+| DELETE | `/household/members/:id` | Удалить участника — только owner |
+| POST | `/household/leave` | Выйти из семьи |
+| GET | `/household/overview` | Сводка финансов всех участников |
+| GET | `/household/accounts` | Счета с `sharedWithHousehold: true` |
+| GET | `/household/transactions` | Транзакции shared-счетов (read-only) |
+| GET/POST/PATCH/DELETE | `/household/budgets` | Семейные бюджеты |
+
+### `GET /household` (пример)
+
+```json
+{
+  "id": "uuid",
+  "name": "Наша семья",
+  "members": [{ "id", "userId", "email", "name", "role", "joinedAt" }],
+  "pendingInvites": [{ "id", "email", "role", "expiresAt" }],
+  "membersLimit": 5,
+  "membersCount": 2,
+  "pendingCount": 1,
+  "features": { "canInvite": true, "canManageBudgets": true },
+  "myRole": "owner"
+}
+```
+
+### Шаринг счёта
+
+`POST /accounts` или `PATCH /accounts/:id`:
+
+```json
+{ "sharedWithHousehold": true }
+```
+
+Требуется Family + членство в household. Приватные счета видны только владельцу.
+
+### Семейные транзакции
+
+`GET /household/transactions?dateFrom=&dateTo=&accountId=&memberUserId=&page=&limit=`
+
+Каждая строка содержит `owner: { userId, name }` — чьих это денег.
+
+### Семейный бюджет
+
+`POST /household/budgets`:
+
+```json
+{
+  "name": "Продукты на семью",
+  "categoryName": "Еда",
+  "limitMinor": 150000,
+  "currency": "KZT"
+}
+```
+
+`spent` считается по транзакциям **всех участников** с категорией `categoryName` (без учёта регистра).
 
 ---
 
@@ -466,16 +550,35 @@ JWT обязателен.
 | `free` | — | 0 | 2 счёта, 1 бюджет, 1 цель |
 | `pro_monthly` | 30 дн. | 2 990 | безлимит счётов/бюджетов/целей, `dashboardIndex` |
 | `pro_yearly` | 365 дн. | 29 900 | то же, год |
-| `family_monthly` | 30 дн. | 4 990 | Pro + `familyMode` (household) |
+| `family_monthly` | 30 дн. | 4 990 | Pro + household до 5 человек, общий бюджет, шаринг счетов |
 | `family_yearly` | 365 дн. | 49 900 | Family, год |
 
 ### 5.2 Эндпоинты
 
 **`GET /v1/billing/plans`** — каталог (без JWT)
 
-**`GET /v1/me/plan`** — эффективный тариф, лимиты, фичи, кратко о подписке (JWT)
+**`GET /v1/me/plan`** — тариф, лимиты, фичи, household, кратко о подписке (JWT)
 
-**`GET /v1/billing/subscription`** — то же + полная запись подписки (JWT)
+**Ответ (ключевые поля):**
+
+| Поле | Описание |
+|------|----------|
+| `plan` | Собственная подписка: `free`, `pro_monthly`, `family_monthly`, … |
+| `limits` | Лимиты **по своей** подписке (не наследуются от семьи) |
+| `features` | Фичи **по подписке** (как в каталоге тарифов) |
+| `featuresEffective` | Фичи с учётом членства в семье — **для UI и гейтинга** |
+| `familyModeSource` | `"subscription"` \| `"membership"` \| `null` |
+| `household` | `{ id, name, role, isOwner }` или `null` |
+| `householdOwnerPlan` | План владельца household (для отладки / badge) |
+| `subscription` | Краткая запись подписки или `null` |
+
+**Профиль:** строку «Семейный режим» строить по `featuresEffective.familyMode`, не по `features.familyMode`.
+
+**Участник семьи без своей подписки:** `plan: "free"`, `features.familyMode: false`, но `featuresEffective.familyMode: true`, `familyModeSource: "membership"`, `household: { role: "member", ... }`. Показать badge «Участник семьи».
+
+**Владелец с Family:** `plan: "family_*"`, `featuresEffective.familyMode: true`, `familyModeSource: "subscription"`.
+
+**`GET /v1/billing/subscription`** — тот же `getPlanResponse()` + полная запись подписки (JWT)
 
 **`POST /v1/billing/checkout`** — `{ "planCode": "pro_monthly" }` → `sessionId`, `amountMinor`, `expiresAt` (15 мин)
 
@@ -486,6 +589,7 @@ JWT обязателен.
 ```
 
 - Успех: PAN начинается с `4242` или `BILLING_MOCK_ALWAYS_SUCCEED=1` на сервере.
+- Ответ при успехе включает **`plan`** — полный snapshot как `GET /me/plan` (можно сразу обновить профиль).
 - Отказ: `decline: true` или PAN `4000000000000002` → **402** `{ "code": "PAYMENT_FAILED" }`.
 - Сессия истекла → **410**.
 
@@ -508,14 +612,14 @@ JWT обязателен.
 }
 ```
 
-Коды: `accounts_limit`, `budgets_limit`, `goals_limit`, `dashboard_index`, `family_mode`, `bank_statement_import`.
+Коды: `accounts_limit`, `budgets_limit`, `goals_limit`, `dashboard_index`, `family_mode`, `household_members_limit`, `bank_statement_import`.
 
 ### 5.4 Сценарий фронта
 
 1. `GET /me/plan` — показать лимиты.
 2. При 403 `FEATURE_GATED` — модалка → `/pricing` → `GET /billing/plans`.
-3. `POST /billing/checkout` → страница `/checkout/[sessionId]` → `confirm`.
-4. `GET /me/plan` → редирект в приложение.
+3. `POST /billing/checkout` → страница `/checkout/[sessionId]` → `confirm` (ответ содержит `plan`).
+4. Обновить стейт из `confirm.plan` или `GET /me/plan` → редирект в приложение.
 
 ---
 

@@ -10,6 +10,9 @@ import { runSalarySchedulesAmountMigration } from './database/run-salary-schedul
 import { runAiContentCacheMigration } from './database/run-ai-content-cache-migration';
 import { runBillingMigration } from './database/run-billing-migration';
 import { runStatementImportMigration } from './database/run-statement-import-migration';
+import { runHouseholdInvitesMigration } from './database/run-household-invites-migration';
+import { runHouseholdBudgetsMigration } from './database/run-household-budgets-migration';
+import { runAccountsShareMigration } from './database/run-accounts-share-migration';
 
 function loadEnv(): void {
   const path = join(process.cwd(), '.env');
@@ -51,6 +54,21 @@ export async function createApp(): Promise<INestApplication> {
     await runStatementImportMigration();
   } catch {
     // migration optional (e.g. first run, or serverless cold start)
+  }
+  try {
+    await runHouseholdInvitesMigration();
+  } catch {
+    // migration optional
+  }
+  try {
+    await runHouseholdBudgetsMigration();
+  } catch {
+    // migration optional
+  }
+  try {
+    await runAccountsShareMigration();
+  } catch {
+    // migration optional
   }
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('v1', { exclude: ['/'] });

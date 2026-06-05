@@ -1,4 +1,4 @@
-import { IsString, IsOptional, Length, Matches } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Length, Matches } from 'class-validator';
 
 export class UpdateAccountDto {
   @IsOptional()
@@ -11,4 +11,8 @@ export class UpdateAccountDto {
   @Length(3, 3)
   @Matches(/^[A-Z]{3}$/, { message: 'Currency must be a 3-letter code (e.g. KZT)' })
   currency?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  sharedWithHousehold?: boolean;
 }

@@ -95,7 +95,7 @@ export class BillingService {
 
     if (session.status === 'completed') {
       const sub = await this.planService.findSubscription(userId);
-      return this.buildConfirmResponse(session, sub);
+      return this.buildConfirmResponse(session, sub, userId);
     }
 
     if (session.status === 'failed') {
@@ -188,17 +188,20 @@ export class BillingService {
       }),
     );
 
-    return this.buildConfirmResponse(session, sub!);
+    return this.buildConfirmResponse(session, sub!, userId);
   }
 
-  private buildConfirmResponse(
+  private async buildConfirmResponse(
     session: BillingCheckoutSession,
     sub: UserBillingSubscription | null,
+    userId: string,
   ) {
+    const plan = await this.planService.getPlanResponse(userId);
     return {
       sessionId: session.id,
       status: 'completed' as const,
       planCode: session.planCode,
+      plan,
       subscription: sub
         ? {
             planCode: sub.planCode,

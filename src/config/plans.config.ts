@@ -17,6 +17,8 @@ export type PlanLimits = {
   accounts: number | null;
   budgets: number | null;
   goals: number | null;
+  /** Max household members (Family); null = N/A */
+  householdMembers: number | null;
 };
 
 export type PlanFeatures = Record<PlanFeatureKey, boolean>;
@@ -34,7 +36,12 @@ export type PlanDefinition = {
   public: boolean;
 };
 
-const FREE_LIMITS: PlanLimits = { accounts: 2, budgets: 1, goals: 1 };
+const FREE_LIMITS: PlanLimits = {
+  accounts: 2,
+  budgets: 1,
+  goals: 1,
+  householdMembers: null,
+};
 const FREE_FEATURES: PlanFeatures = {
   dashboardIndex: false,
   forecast: true,
@@ -42,7 +49,12 @@ const FREE_FEATURES: PlanFeatures = {
   bankStatementImport: false,
 };
 
-const PRO_LIMITS: PlanLimits = { accounts: null, budgets: null, goals: null };
+const PRO_LIMITS: PlanLimits = {
+  accounts: null,
+  budgets: null,
+  goals: null,
+  householdMembers: null,
+};
 const PRO_FEATURES: PlanFeatures = {
   dashboardIndex: true,
   forecast: true,
@@ -98,7 +110,7 @@ export const PLAN_CATALOG: Record<PlanCode, PlanDefinition> = {
     amountMinor: 4990,
     currency: 'KZT',
     intervalDays: 30,
-    limits: PRO_LIMITS,
+    limits: { ...PRO_LIMITS, householdMembers: 5 },
     features: FAMILY_FEATURES,
     public: true,
   },
@@ -109,7 +121,7 @@ export const PLAN_CATALOG: Record<PlanCode, PlanDefinition> = {
     amountMinor: 49900,
     currency: 'KZT',
     intervalDays: 365,
-    limits: PRO_LIMITS,
+    limits: { ...PRO_LIMITS, householdMembers: 5 },
     features: FAMILY_FEATURES,
     public: true,
   },

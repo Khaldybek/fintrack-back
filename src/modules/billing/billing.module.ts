@@ -6,6 +6,8 @@ import { BillingInvoice } from './entities/billing-invoice.entity';
 import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { PlanService } from './plan.service';
+import { HouseholdMember } from '../household/entities/household-member.entity';
+import { Household } from '../household/entities/household.entity';
 
 @Global()
 @Module({
@@ -14,6 +16,8 @@ import { PlanService } from './plan.service';
       BillingCheckoutSession,
       UserBillingSubscription,
       BillingInvoice,
+      HouseholdMember,
+      Household,
     ]),
   ],
   controllers: [BillingController],

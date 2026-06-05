@@ -32,6 +32,9 @@ export class Account {
   @Column({ name: 'balance_minor', type: 'bigint', default: 0 })
   balanceMinor: number;
 
+  @Column({ name: 'shared_with_household', type: 'boolean', default: false })
+  sharedWithHousehold: boolean;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 

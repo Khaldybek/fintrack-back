@@ -7,11 +7,14 @@ import {
   listPublicPlans,
   type PlanCode,
   type PlanFeatureKey,
+  type PlanFeatures,
   type PlanLimits,
   PLAN_CATALOG,
 } from '../../config/plans.config';
 import { FeatureGatedException } from '../../common/errors/feature-gated.exception';
 import { UserBillingSubscription } from './entities/user-billing-subscription.entity';
+import { HouseholdMember } from '../household/entities/household-member.entity';
+import { Household } from '../household/entities/household.entity';
 
 function todayYmd(): string {
   return new Date().toISOString().slice(0, 10);
@@ -29,11 +32,17 @@ function daysBetweenYmd(from: string, to: string): number {
   return Math.round((b - a) / (24 * 60 * 60 * 1000));
 }
 
+export type FamilyModeSource = 'subscription' | 'membership' | null;
+
 @Injectable()
 export class PlanService {
   constructor(
     @InjectRepository(UserBillingSubscription)
     private readonly subscriptionRepo: Repository<UserBillingSubscription>,
+    @InjectRepository(HouseholdMember)
+    private readonly householdMemberRepo: Repository<HouseholdMember>,
+    @InjectRepository(Household)
+    private readonly householdRepo: Repository<Household>,
   ) {}
 
   listPublicPlans() {
@@ -97,6 +106,56 @@ export class PlanService {
     return 'free';
   }
 
+  async getHouseholdMembership(userId: string): Promise<{
+    id: string;
+    name: string;
+    role: string;
+    isOwner: boolean;
+    ownerId: string;
+  } | null> {
+    const membership = await this.householdMemberRepo.findOne({
+      where: { userId },
+      relations: ['household'],
+    });
+    if (!membership?.household) return null;
+    return {
+      id: membership.household.id,
+      name: membership.household.name,
+      role: membership.role,
+      isOwner: membership.role === 'owner',
+      ownerId: membership.household.ownerId,
+    };
+  }
+
+  async hasEffectiveFeature(userId: string, feature: PlanFeatureKey): Promise<boolean> {
+    if (feature === 'familyMode') {
+      const subHas = await this.hasFeature(userId, 'familyMode');
+      if (subHas) return true;
+      const membership = await this.getHouseholdMembership(userId);
+      return membership !== null;
+    }
+    return this.hasFeature(userId, feature);
+  }
+
+  private buildFeaturesEffective(
+    subscriptionFeatures: PlanFeatures,
+    inHousehold: boolean,
+  ): { featuresEffective: PlanFeatures; familyModeSource: FamilyModeSource } {
+    const viaSubscription = subscriptionFeatures.familyMode;
+    const effectiveFamilyMode = viaSubscription || inHousehold;
+    let familyModeSource: FamilyModeSource = null;
+    if (effectiveFamilyMode) {
+      familyModeSource = viaSubscription ? 'subscription' : 'membership';
+    }
+    return {
+      featuresEffective: {
+        ...subscriptionFeatures,
+        familyMode: effectiveFamilyMode,
+      },
+      familyModeSource,
+    };
+  }
+
   async getLimits(userId: string): Promise<PlanLimits> {
     const code = await this.getEffectivePlanCode(userId);
     return getPlanDefinition(code).limits;
@@ -111,11 +170,32 @@ export class PlanService {
     const sub = await this.refreshSubscriptionStatus(userId);
     const effectiveCode = await this.getEffectivePlanCode(userId);
     const def = getPlanDefinition(effectiveCode);
+    const householdMembership = await this.getHouseholdMembership(userId);
+    const { featuresEffective, familyModeSource } = this.buildFeaturesEffective(
+      def.features,
+      householdMembership !== null,
+    );
+
+    let householdOwnerPlan: PlanCode | null = null;
+    if (householdMembership) {
+      householdOwnerPlan = await this.getEffectivePlanCode(householdMembership.ownerId);
+    }
 
     return {
       plan: effectiveCode,
       limits: def.limits,
       features: def.features,
+      featuresEffective,
+      familyModeSource,
+      household: householdMembership
+        ? {
+            id: householdMembership.id,
+            name: householdMembership.name,
+            role: householdMembership.role,
+            isOwner: householdMembership.isOwner,
+          }
+        : null,
+      householdOwnerPlan,
       subscription: sub
         ? {
             planCode: sub.planCode,
@@ -165,6 +245,18 @@ export class PlanService {
     upgradeHint: string,
   ): Promise<void> {
     const ok = await this.hasFeature(userId, feature);
+    if (!ok) {
+      throw new FeatureGatedException(featureCode, upgradeHint);
+    }
+  }
+
+  async assertEffectiveFeature(
+    userId: string,
+    feature: PlanFeatureKey,
+    featureCode: string,
+    upgradeHint: string,
+  ): Promise<void> {
+    const ok = await this.hasEffectiveFeature(userId, feature);
     if (!ok) {
       throw new FeatureGatedException(featureCode, upgradeHint);
     }
